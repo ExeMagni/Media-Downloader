@@ -6,6 +6,8 @@ from PySide6 import QtWidgets
 
 from src.view_pyside import MusicDownloaderView
 
+# TODO: Agregar un Checkbox para habilitar o no la búsqueda en Spotify y descarga de carátulas
+
 
 def get_spotify_credentials_qt(parent=None):
     # Lee si ya existen
@@ -48,7 +50,9 @@ if __name__ == "__main__":
     client_id, client_secret = get_spotify_credentials_qt()
 
     model = MediaManager()
-    controller = MusicDownloaderController(model, client_id, client_secret)
+    # Deshabilitar búsquedas en Spotify y búsqueda/descarga de carátulas por ahora
+    controller = MusicDownloaderController(model, client_id, client_secret,
+                                           enable_spotify=False, enable_cover=False)
 
     # Crear la ventana principal (la vista se encargará de mostrarla)
     view = MusicDownloaderView(controller)

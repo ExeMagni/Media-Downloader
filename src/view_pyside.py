@@ -42,6 +42,7 @@ class SearchWorker(QtCore.QObject):
 class DownloadWorker(QtCore.QObject):
     progress = QtCore.Signal(object)
     finished = QtCore.Signal(bool, str)
+    log = QtCore.Signal(str)
 
     def __init__(self, controller, song_list, save_path):
         super().__init__()
@@ -57,8 +58,9 @@ class DownloadWorker(QtCore.QObject):
     def run(self):
         try:
             start_time = time.time()
+            # Pass the worker's log emitter as log_hook so controller forwards yt-dlp text output
             self.controller.download_multiple_songs(
-                self.song_list, self.save_path, self.progress_hook)
+                self.song_list, self.save_path, self.progress_hook, log_hook=self.log.emit)
             elapsed = time.time() - start_time
             self.finished.emit(True, f"Duración: {elapsed:.2f}s")
         except Exception as e:
@@ -262,6 +264,8 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_thread_qt = QtCore.QThread()
         self.download_worker.moveToThread(self.download_thread_qt)
         self.download_worker.progress.connect(self.on_progress)
+        # connect textual logs from yt-dlp to GUI log
+        self.download_worker.log.connect(self.append_log)
         self.download_worker.finished.connect(self.on_finished)
         self.download_thread_qt.started.connect(self.download_worker.run)
         self.download_thread_qt.start()

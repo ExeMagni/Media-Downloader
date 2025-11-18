@@ -12,40 +12,60 @@ class Song:
 class MediaManager:
     def __init__(self):
         self.songs = []
+        # Index for faster text searches (list of dicts with lowercased fields)
+        self._index = []
 
     def add_song(self, song):
         self.songs.append(song)
+        # update index
+        try:
+            self._index.append({
+                'title': song.title.lower(),
+                'artist': song.artist.lower(),
+                'url': (song.url or '').lower(),
+                'obj': song
+            })
+        except Exception:
+            pass
 
     def find_song(self, title=None, artist=None):
         results = []
-        for song in self.songs:
-            if (title and title.lower() in song.title.lower()) or (artist and artist.lower() in song.artist.lower()):
-                results.append(song)
+        lt = title.lower() if title else None
+        la = artist.lower() if artist else None
+        for entry in self._index:
+            if (lt and lt in entry['title']) or (la and la in entry['artist']):
+                results.append(entry['obj'])
         return results
 
     def search(self, query):
+        q = query.lower()
         results = []
-        for song in self.songs:
-            if (query.lower() in song.title.lower() or
-                query.lower() in song.artist.lower() or
-                    query.lower() in song.url.lower()):
-                results.append({'type': 'song', 'title': song.title,
-                               'artist': song.artist, 'url': song.url,
-                                'youtube_url': song.youtube_url})
+        for entry in self._index:
+            if q in entry['title'] or q in entry['artist'] or q in entry['url']:
+                s = entry['obj']
+                results.append({'type': 'song', 'title': s.title,
+                                'artist': s.artist, 'url': s.url,
+                                'youtube_url': s.youtube_url})
         return results
 
     def search_by_artist_title(self, artist, title):
+        a = artist.lower()
+        t = title.lower()
         results = []
-        for song in self.songs:
-            if artist.lower() in song.artist.lower() and title.lower() in song.title.lower():
-                results.append({'type': 'song', 'title': song.title,
-                               'artist': song.artist, 'url': song.url,
-                                'youtube_url': song.youtube_url})
+        for entry in self._index:
+            if a in entry['artist'] and t in entry['title']:
+                s = entry['obj']
+                results.append({'type': 'song', 'title': s.title,
+                                'artist': s.artist, 'url': s.url,
+                                'youtube_url': s.youtube_url})
         return results
 
     def get_song(self, title, artist):
-        for song in self.songs:
-            if title.lower() in song.title.lower() and artist.lower() in song.artist.lower():
+        t = title.lower()
+        a = artist.lower()
+        for entry in self._index:
+            if t in entry['title'] and a in entry['artist']:
+                song = entry['obj']
                 return {
                     'title': song.title,
                     'artist': song.artist,
@@ -60,8 +80,25 @@ class MediaManager:
         if not metadata:
             return []
         # Crear obj con la metadata
-        song = Song(metadata['title'], metadata['artist'],
-                    metadata['youtube_url'], metadata.get('youtube_url'))
+        title = metadata.get('title')
+        artist = metadata.get('artist')
+        youtube_url = metadata.get(
+            'youtube_url') or metadata.get('webpage_url')
+        if not title or not artist:
+            return
+        # avoid duplicates
+        existing = self.get_song(title, artist)
+        if existing:
+            # update youtube_url if missing
+            if not existing.get('youtube_url') and youtube_url:
+                existing_song = self.get_song(title, artist)
+                # find object and update
+                for s in self.songs:
+                    if title.lower() in s.title.lower() and artist.lower() in s.artist.lower():
+                        s.youtube_url = youtube_url
+                        break
+            return
+        song = Song(title, artist, youtube_url, youtube_url)
         self.add_song(song)
 
     def fetch_spotify_metadata(self, spotify_api, query):
