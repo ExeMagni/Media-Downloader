@@ -1,55 +1,57 @@
 from src.controller import MusicDownloaderController
 from src.model import MediaManager
-from src.view import MusicDownloaderView
-
-import tkinter as tk
-from tkinter import simpledialog, messagebox
 import os
+import sys
+from PySide6 import QtWidgets
+
+from src.view_pyside import MusicDownloaderView
 
 
-def get_spotify_credentials():
+def get_spotify_credentials_qt(parent=None):
+    # Lee si ya existen
     if os.path.exists("secret/spotify_secrets.txt"):
         with open("secret/spotify_secrets.txt") as f:
             return f.read().splitlines()
+
+    QtWidgets.QMessageBox.information(
+        parent,
+        "Spotify API",
+        "Ingrese por favor sus claves de Spotify API para obtener metadatos."
+    )
+    client_id, ok1 = QtWidgets.QInputDialog.getText(
+        parent, "Spotify API", "Client ID:")
+    client_secret, ok2 = QtWidgets.QInputDialog.getText(
+        parent, "Spotify API", "Client Secret:")
+    if ok1 and ok2 and client_id and client_secret:
+        os.makedirs("secret", exist_ok=True)
+        with open("secret/spotify_secrets.txt", "w") as f:
+            f.write(f"{client_id}\n{client_secret}")
+        return [client_id, client_secret]
     else:
-        root = tk.Tk()
-        root.withdraw()  # Oculta la ventana principal
-        messagebox.showinfo(
-            "Spotify API",
-            "Ingrese por favor sus claves de Spotify API para obtener metadatos."
+        continuar = QtWidgets.QMessageBox.question(
+            parent,
+            "Continuar sin datos",
+            "¿Desea continuar sin claves de Spotify? No se obtendrán metadatos.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes,
         )
-        client_id = simpledialog.askstring("Spotify API", "Client ID:")
-        client_secret = simpledialog.askstring("Spotify API", "Client Secret:")
-        if client_id and client_secret:
-            os.makedirs("secret", exist_ok=True)
-            with open("secret/spotify_secrets.txt", "w") as f:
-                f.write(f"{client_id}\n{client_secret}")
-            root.destroy()
-            return [client_id, client_secret]
+        if continuar == QtWidgets.QMessageBox.Yes:
+            return [None, None]
         else:
-            continuar = messagebox.askyesno(
-                "Continuar sin datos",
-                "¿Desea continuar sin claves de Spotify? No se obtendrán metadatos."
-            )
-            root.destroy()
-            if continuar:
-                return [None, None]
-            else:
-                exit()
+            sys.exit(0)
 
 
 if __name__ == "__main__":
-    client_id, client_secret = get_spotify_credentials()
+    app = QtWidgets.QApplication(sys.argv)
 
-    root = tk.Tk()
+    # Pedir credenciales con cuadros de diálogo Qt
+    client_id, client_secret = get_spotify_credentials_qt()
+
     model = MediaManager()
     controller = MusicDownloaderController(model, client_id, client_secret)
-    view = MusicDownloaderView(root, controller)
 
-    def on_closing():
-        root.quit()
-        root.destroy()
+    # Crear la ventana principal (la vista se encargará de mostrarla)
+    view = MusicDownloaderView(controller)
+    view.show()
 
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-    root.title("Music Downloader")
-    root.mainloop()
+    sys.exit(app.exec())

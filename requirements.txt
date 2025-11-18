@@ -1,7 +1,9 @@
-tkinter
 requests
 pytube
-youtube-dl
 spotipy
 beautifulsoup4
 lxml
+yt-dlp
+PySide6
+Pillow
+streamlink
