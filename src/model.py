@@ -81,13 +81,13 @@ class MediaManager:
             return []
         # Crear obj con la metadata
         title = metadata.get('title')
-        artist = metadata.get('artist')
+        artist = metadata.get('artist') or ''
         youtube_url = metadata.get(
-            'youtube_url') or metadata.get('webpage_url')
-        if not title or not artist:
+            'youtube_url') or metadata.get('webpage_url') or ''
+        if not title:
             return
-        # avoid duplicates
-        existing = self.get_song(title, artist)
+        # avoid duplicates (if artist provided use both, otherwise skip exact artist match)
+        existing = self.get_song(title, artist) if artist else None
         if existing:
             # update youtube_url if missing
             if not existing.get('youtube_url') and youtube_url:
@@ -98,6 +98,7 @@ class MediaManager:
                         s.youtube_url = youtube_url
                         break
             return
+        # Create Song even if artist is empty; store youtube_url as both url and youtube_url
         song = Song(title, artist, youtube_url, youtube_url)
         self.add_song(song)
 

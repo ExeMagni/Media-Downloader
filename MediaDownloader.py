@@ -7,6 +7,7 @@ from PySide6 import QtWidgets
 from src.view_pyside import MusicDownloaderView
 
 # TODO: Agregar un Checkbox para habilitar o no la búsqueda en Spotify y descarga de carátulas
+# FIXME: Arreglar que no se descargan o no se encuentran videos
 
 
 def get_spotify_credentials_qt(parent=None):

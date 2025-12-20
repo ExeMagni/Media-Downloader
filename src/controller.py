@@ -79,7 +79,18 @@ class MusicDownloaderController:
             results.extend(cached[1])
             return results
         # Si es una playlist de youtube (URL explícita de playlist)
-        if query.startswith("https://www.youtube.com/playlist") or query.startswith("https://youtu.be/playlist"):
+        is_playlist = False
+        try:
+            parts = urlsplit(query)
+            hostname = (parts.netloc or '').lower()
+            path = (parts.path or '').lower()
+            qs = dict(parse_qsl(parts.query, keep_blank_values=True))
+            if ('youtube.com' in hostname or 'youtu.be' in hostname) and path.startswith('/playlist'):
+                is_playlist = True
+        except Exception:
+            is_playlist = False
+
+        if is_playlist:
             youtube_results = self.search_youtube_playlist(query)
             results.extend(youtube_results)
             # cache playlist result
@@ -169,6 +180,15 @@ class MusicDownloaderController:
             }],
             'quiet': True,
             'noplaylist': True,
+            # Make requests more browser-like to avoid 403s and enable geo bypass
+            'nocheckcertificate': True,
+            'geo_bypass': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+            },
+            'extractor_args': {
+                'youtube': {'player_client': 'web_html5'}
+            },
         }
         # Attach logger if provided to forward textual output
         if log_hook:
@@ -211,6 +231,14 @@ class MusicDownloaderController:
             'progress_hooks': [progress_hook],
             'quiet': True,
             'noplaylist': True,
+            'nocheckcertificate': True,
+            'geo_bypass': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+            },
+            'extractor_args': {
+                'youtube': {'player_client': 'web_html5'}
+            },
         }
         if log_hook:
             ydl_opts['logger'] = _YtdlpLogger(log_hook)
@@ -228,17 +256,25 @@ class MusicDownloaderController:
             else:
                 print(f"[ERROR] download_video falló: {e}")
 
-    def download_multiple_songs(self, song_list, save_path, progress_hook, max_workers=None, log_hook=None):
+    def download_multiple_songs(self, song_list, save_path, progress_hook, max_workers=None, log_hook=None, per_file_hook=None):
         """
         Descarga varias canciones en paralelo usando un pool de hilos.
         song_list: lista de dicts con keys 'title', 'artist', 'format'
         """
         workers = max_workers if max_workers else self.max_workers
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = []
 
-            def _task(song):
+            def _task(idx, song):
+                # Notify per-file start if hook provided
                 try:
+                    if per_file_hook:
+                        try:
+                            per_file_hook(idx, len(song_list),
+                                          song.get('title'))
+                        except Exception:
+                            pass
                     return self.download_song(song["title"], song["artist"], save_path, progress_hook, song["format"], log_hook=log_hook)
                 except Exception as e:
                     if log_hook:
@@ -251,8 +287,8 @@ class MusicDownloaderController:
                         print(
                             f"[ERROR] descarga de {song.get('title')} falló: {e}")
 
-            for song in song_list:
-                futures.append(executor.submit(_task, song))
+            for idx, song in enumerate(song_list):
+                futures.append(executor.submit(_task, idx, song))
 
             for f in concurrent.futures.as_completed(futures):
                 try:
@@ -262,7 +298,18 @@ class MusicDownloaderController:
 
     def search_youtube_url(self, url):
         """Obtiene metadatos de un video de YouTube por URL."""
-        ydl_opts = {'quiet': True, 'skip_download': True}
+        ydl_opts = {
+            'quiet': True,
+            'skip_download': True,
+            'nocheckcertificate': True,
+            'geo_bypass': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+            },
+            'extractor_args': {
+                'youtube': {'player_client': 'web_html5'}
+            },
+        }
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -284,8 +331,15 @@ class MusicDownloaderController:
         """Obtiene metadatos ligeros de una playlist de YouTube (flat) para listar rápido.
         Evita descargar metadatos completos de entrada para acelerar la respuesta.
         """
-        ydl_opts = {'quiet': True, 'skip_download': True,
-                    'ignoreerrors': True, 'extract_flat': True}
+        # Use flat extraction and avoid cache/warnings to minimize I/O and delay
+        ydl_opts = {
+            'quiet': True,
+            'skip_download': True,
+            'ignoreerrors': True,
+            'extract_flat': True,
+            'cachedir': False,
+            'no_warnings': True,
+        }
         results = []
         seen = set()
         try:
@@ -296,19 +350,19 @@ class MusicDownloaderController:
                 for entry in entries:
                     if not entry:
                         continue
-                    # flat entries might contain 'title' and 'id' or 'url'
+                    # flat entries usually contain only 'title' and 'id' or 'url'
                     title = entry.get('title') or ''
-                    uploader = entry.get('uploader') or entry.get(
-                        'uploader_id') or ''
+                    # keep artist minimal (avoid extra lookups)
+                    uploader = ''
                     webpage = entry.get('webpage_url') or entry.get('url')
-                    key = (title.lower(), uploader.lower())
+                    key = (title.lower(), (webpage or '').lower())
                     if key in seen:
                         continue
                     seen.add(key)
+                    # Return only minimal fields: title and youtube_url
                     result = {
-                        'artist': uploader,
                         'title': title,
-                        'cover_url': entry.get('thumbnail', '') if self.enable_cover else '',
+                        'artist': uploader,
                         'youtube_url': webpage or ''
                     }
                     results.append(result)
@@ -323,6 +377,14 @@ class MusicDownloaderController:
             'quiet': True,
             'skip_download': True,
             'default_search': 'auto',
+            'nocheckcertificate': True,
+            'geo_bypass': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+            },
+            'extractor_args': {
+                'youtube': {'player_client': 'web_html5'}
+            },
         }
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

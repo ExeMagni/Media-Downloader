@@ -43,6 +43,10 @@ class DownloadWorker(QtCore.QObject):
     progress = QtCore.Signal(object)
     finished = QtCore.Signal(bool, str)
     log = QtCore.Signal(str)
+    # Emitted when a file download starts: index, total, title
+    file_started = QtCore.Signal(int, int, str)
+    # Emit overall progress percent (0-100)
+    overall_progress = QtCore.Signal(int)
 
     def __init__(self, controller, song_list, save_path):
         super().__init__()
@@ -59,8 +63,22 @@ class DownloadWorker(QtCore.QObject):
         try:
             start_time = time.time()
             # Pass the worker's log emitter as log_hook so controller forwards yt-dlp text output
+            # Provide a per_file_hook so the UI knows which file is being downloaded and overall progress
+
+            def per_file_hook(idx, total, title):
+                # emit file started and overall percent (completed files / total)
+                try:
+                    self.file_started.emit(idx, total, title)
+                except Exception:
+                    pass
+                try:
+                    pct = int((idx) / total * 100) if total > 0 else 0
+                    self.overall_progress.emit(pct)
+                except Exception:
+                    pass
+
             self.controller.download_multiple_songs(
-                self.song_list, self.save_path, self.progress_hook, log_hook=self.log.emit)
+                self.song_list, self.save_path, self.progress_hook, log_hook=self.log.emit, per_file_hook=per_file_hook)
             elapsed = time.time() - start_time
             self.finished.emit(True, f"Duración: {elapsed:.2f}s")
         except Exception as e:
@@ -151,6 +169,15 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
+        # Overall progress: number of files completed / total
+        self.overall_progress_bar = QtWidgets.QProgressBar()
+        self.overall_progress_bar.setRange(0, 100)
+        self.overall_progress_bar.setVisible(False)
+        layout.addWidget(self.overall_progress_bar)
+
+        self.current_file_label = QtWidgets.QLabel("")
+        layout.addWidget(self.current_file_label)
+
         self.status_label = QtWidgets.QLabel("")
         layout.addWidget(self.status_label)
 
@@ -184,6 +211,14 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
 
     def search_thread(self):
         self.search_button.setEnabled(False)
+        # Indicar visualmente que se está realizando la búsqueda
+        self.status_label.setText("Buscando...")
+        self.search_button.setText("Buscando...")
+        # Mostrar barra de progreso en modo indeterminado
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+        # Cambiar cursor a espera
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         query = self.search_entry.text().strip()
         title = self.song_entry.text().strip()
         artist = self.artist_entry.text().strip()
@@ -204,12 +239,28 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         for r in results:
             artist = r.get('artist', '')
             title = r.get('title', '')
-            self.results_list.addItem(f"{artist} - {title}")
+            # Show only title when artist is empty (playlist fast-load case)
+            if artist:
+                self.results_list.addItem(f"{artist} - {title}")
+            else:
+                self.results_list.addItem(title)
+        # Restaurar estado de la UI tras la búsqueda
         self.search_button.setEnabled(True)
+        self.search_button.setText("Buscar")
+        self.status_label.setText("")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setVisible(False)
+        QtWidgets.QApplication.restoreOverrideCursor()
 
     def on_search_error(self, msg):
         QtWidgets.QMessageBox.critical(self, "Error", msg)
+        # Restaurar estado de la UI tras el error
         self.search_button.setEnabled(True)
+        self.search_button.setText("Buscar")
+        self.status_label.setText("")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setVisible(False)
+        QtWidgets.QApplication.restoreOverrideCursor()
 
     def add_song(self, item=None):
         idx = self.results_list.currentRow()
@@ -220,6 +271,12 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         result = self.controller.last_results[idx]
         fmt = 'mp3' if self.mp3_radio.isChecked() else 'mp4'
         display = f"({'MP3' if fmt == 'mp3' else 'MP4'}) {result.get('artist', '')} - {result.get('title', '')}"
+        # If result comes from a playlist it may include a youtube_url; add lightweight metadata to model
+        if result.get('youtube_url'):
+            try:
+                self.controller.model.fetch_youtube_metadata(result)
+            except Exception:
+                pass
         self.song_list.append({
             'artist': result.get('artist', ''),
             'title': result.get('title', ''),
@@ -239,6 +296,12 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         fmt = 'mp3' if self.mp3_radio.isChecked() else 'mp4'
         for r in results:
             display = f"({'MP3' if fmt == 'mp3' else 'MP4'}) {r.get('artist', '')} - {r.get('title', '')}"
+            # For playlist-fast results, register lightweight entry in model so download uses the youtube_url
+            if r.get('youtube_url'):
+                try:
+                    self.controller.model.fetch_youtube_metadata(r)
+                except Exception:
+                    pass
             self.song_list.append({
                 'artist': r.get('artist', ''),
                 'title': r.get('title', ''),
@@ -266,6 +329,9 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_worker.progress.connect(self.on_progress)
         # connect textual logs from yt-dlp to GUI log
         self.download_worker.log.connect(self.append_log)
+        # connect per-file and overall progress signals
+        self.download_worker.file_started.connect(self.on_file_started)
+        self.download_worker.overall_progress.connect(self.on_overall_progress)
         self.download_worker.finished.connect(self.on_finished)
         self.download_thread_qt.started.connect(self.download_worker.run)
         self.download_thread_qt.start()
@@ -284,9 +350,25 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         elif status == 'finished':
             self.progress_bar.setValue(100)
 
+    def on_file_started(self, idx, total, title):
+        # idx is 0-based
+        self.current_file_label.setText(
+            f"Descargando {idx+1}/{total}: {title}")
+        self.overall_progress_bar.setVisible(True)
+        # represent completed files proportionally
+        pct = int((idx) / total * 100) if total > 0 else 0
+        self.overall_progress_bar.setValue(pct)
+        self.progress_bar.setVisible(True)
+
+    def on_overall_progress(self, percent):
+        # percent 0-100
+        self.overall_progress_bar.setValue(percent)
+
     def on_finished(self, success, message):
         self.append_log(f"Finalizado: success={success} message={message}")
         self.progress_bar.setVisible(False)
+        self.overall_progress_bar.setVisible(False)
+        self.current_file_label.setText("")
         if hasattr(self, 'download_thread_qt') and self.download_thread_qt.isRunning():
             self.download_thread_qt.quit()
             self.download_thread_qt.wait()
