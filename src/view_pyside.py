@@ -45,6 +45,8 @@ class DownloadWorker(QtCore.QObject):
     log = QtCore.Signal(str)
     # Emitted when a file download starts: index, total, title
     file_started = QtCore.Signal(int, int, str)
+    # Emitted for per-file progress: index, info_dict
+    file_progress = QtCore.Signal(int, object)
     # Emit overall progress percent (0-100)
     overall_progress = QtCore.Signal(int)
 
@@ -77,8 +79,17 @@ class DownloadWorker(QtCore.QObject):
                 except Exception:
                     pass
 
+            # per-file progress hook: emit index + progress info
+            def per_file_progress_hook(idx, info):
+                try:
+                    self.file_progress.emit(idx, info)
+                except Exception:
+                    pass
+
             self.controller.download_multiple_songs(
-                self.song_list, self.save_path, self.progress_hook, log_hook=self.log.emit, per_file_hook=per_file_hook)
+                self.song_list, self.save_path, self.progress_hook,
+                log_hook=self.log.emit, per_file_hook=per_file_hook,
+                per_file_progress_hook=per_file_progress_hook)
             elapsed = time.time() - start_time
             self.finished.emit(True, f"Duración: {elapsed:.2f}s")
         except Exception as e:
@@ -164,10 +175,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_button.clicked.connect(self.download_thread)
         layout.addWidget(self.download_button)
 
-        self.progress_bar = QtWidgets.QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
+        # Per-item progress bars are shown in the downloads list; removed global progress bar
 
         # Overall progress: number of files completed / total
         self.overall_progress_bar = QtWidgets.QProgressBar()
@@ -191,6 +199,9 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
 
         # Internal state
         self.song_list = []
+        # Keep widgets and progress bars parallel to `song_list`
+        self.download_item_widgets = []
+        self.download_item_bars = []
         self.controller.last_results = []
         self.threads = []
 
@@ -214,9 +225,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         # Indicar visualmente que se está realizando la búsqueda
         self.status_label.setText("Buscando...")
         self.search_button.setText("Buscando...")
-        # Mostrar barra de progreso en modo indeterminado
-        self.progress_bar.setRange(0, 0)
-        self.progress_bar.setVisible(True)
+        # Indicar búsqueda en curso mediante estado y cursor (no global progress bar)
         # Cambiar cursor a espera
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         query = self.search_entry.text().strip()
@@ -248,8 +257,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.search_button.setEnabled(True)
         self.search_button.setText("Buscar")
         self.status_label.setText("")
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setVisible(False)
+        # restore search UI state
         QtWidgets.QApplication.restoreOverrideCursor()
 
     def on_search_error(self, msg):
@@ -258,8 +266,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.search_button.setEnabled(True)
         self.search_button.setText("Buscar")
         self.status_label.setText("")
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setVisible(False)
+        # restore search UI state
         QtWidgets.QApplication.restoreOverrideCursor()
 
     def add_song(self, item=None):
@@ -283,13 +290,38 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             'format': fmt,
             'display': display
         })
-        self.downloads_list.addItem(display)
+        # Create list item with embedded progress bar
+        item = QtWidgets.QListWidgetItem()
+        widget = QtWidgets.QWidget()
+        h = QtWidgets.QHBoxLayout(widget)
+        lbl = QtWidgets.QLabel(display)
+        bar = QtWidgets.QProgressBar()
+        bar.setRange(0, 100)
+        bar.setValue(0)
+        bar.setFixedWidth(160)
+        h.addWidget(lbl)
+        h.addStretch()
+        h.addWidget(bar)
+        h.setContentsMargins(2, 2, 2, 2)
+        item.setSizeHint(widget.sizeHint())
+        self.downloads_list.addItem(item)
+        self.downloads_list.setItemWidget(item, widget)
+        self.download_item_widgets.append((item, widget))
+        self.download_item_bars.append(bar)
 
     def remove_song(self, item=None):
         idx = self.downloads_list.currentRow()
         if idx >= 0:
             self.downloads_list.takeItem(idx)
             self.song_list.pop(idx)
+            try:
+                self.download_item_widgets.pop(idx)
+            except Exception:
+                pass
+            try:
+                self.download_item_bars.pop(idx)
+            except Exception:
+                pass
 
     def select_all_results(self):
         results = getattr(self.controller, 'last_results', [])
@@ -308,7 +340,23 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
                 'format': fmt,
                 'display': display
             })
-            self.downloads_list.addItem(display)
+            item = QtWidgets.QListWidgetItem()
+            widget = QtWidgets.QWidget()
+            h = QtWidgets.QHBoxLayout(widget)
+            lbl = QtWidgets.QLabel(display)
+            bar = QtWidgets.QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            bar.setFixedWidth(160)
+            h.addWidget(lbl)
+            h.addStretch()
+            h.addWidget(bar)
+            h.setContentsMargins(2, 2, 2, 2)
+            item.setSizeHint(widget.sizeHint())
+            self.downloads_list.addItem(item)
+            self.downloads_list.setItemWidget(item, widget)
+            self.download_item_widgets.append((item, widget))
+            self.download_item_bars.append(bar)
 
     def download_thread(self):
         if not self.song_list:
@@ -331,42 +379,58 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_worker.log.connect(self.append_log)
         # connect per-file and overall progress signals
         self.download_worker.file_started.connect(self.on_file_started)
+        self.download_worker.file_progress.connect(self.on_file_progress)
         self.download_worker.overall_progress.connect(self.on_overall_progress)
         self.download_worker.finished.connect(self.on_finished)
         self.download_thread_qt.started.connect(self.download_worker.run)
         self.download_thread_qt.start()
         self.threads.append(self.download_thread_qt)
-        self.progress_bar.setVisible(True)
         self.append_log(f"Iniciando descarga en: {save_path}")
 
     def on_progress(self, info):
-        status = info.get('status')
-        if status == 'downloading':
-            total = info.get('total_bytes') or info.get('total_bytes_estimate')
-            downloaded = info.get('downloaded_bytes')
-            if total and downloaded is not None:
-                percent = int(downloaded * 100 / total)
-                self.progress_bar.setValue(percent)
-        elif status == 'finished':
-            self.progress_bar.setValue(100)
+        # Global raw progress hook is no longer used for a single global bar.
+        # Per-file progress is handled via `file_progress` signal.
+        return
 
     def on_file_started(self, idx, total, title):
         # idx is 0-based
-        self.current_file_label.setText(
-            f"Descargando {idx+1}/{total}: {title}")
+        # Show only progress count (do not display current file title)
+        self.current_file_label.setText(f"Descargando {idx+1}/{total}")
         self.overall_progress_bar.setVisible(True)
         # represent completed files proportionally
         pct = int((idx) / total * 100) if total > 0 else 0
         self.overall_progress_bar.setValue(pct)
-        self.progress_bar.setVisible(True)
+        # Ensure the corresponding per-item bar is reset/visible
+        try:
+            if idx < len(self.download_item_bars):
+                self.download_item_bars[idx].setValue(0)
+        except Exception:
+            pass
 
     def on_overall_progress(self, percent):
         # percent 0-100
         self.overall_progress_bar.setValue(percent)
 
+    def on_file_progress(self, idx, info):
+        # Update the specific per-item progress bar using info dict
+        try:
+            status = info.get('status')
+            if status == 'downloading':
+                total = info.get('total_bytes') or info.get(
+                    'total_bytes_estimate')
+                downloaded = info.get('downloaded_bytes')
+                if total and downloaded is not None and total > 0:
+                    percent = int(downloaded * 100 / total)
+                    if idx < len(self.download_item_bars):
+                        self.download_item_bars[idx].setValue(percent)
+            elif status == 'finished':
+                if idx < len(self.download_item_bars):
+                    self.download_item_bars[idx].setValue(100)
+        except Exception:
+            pass
+
     def on_finished(self, success, message):
         self.append_log(f"Finalizado: success={success} message={message}")
-        self.progress_bar.setVisible(False)
         self.overall_progress_bar.setVisible(False)
         self.current_file_label.setText("")
         if hasattr(self, 'download_thread_qt') and self.download_thread_qt.isRunning():

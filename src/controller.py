@@ -55,7 +55,10 @@ class MusicDownloaderController:
         self.enable_cover = enable_cover
         self._search_cache = {}  # simple cache: query -> (ts, results)
         self.cache_ttl = 300  # seconds
-        self.max_workers = max_workers or DEFAULT_MAX_WORKERS
+        # Limit concurrent download tasks to avoid saturating the system.
+        # Enforce at most 5 concurrent downloads by default (can still be overridden by max_workers arg).
+        requested = max_workers or DEFAULT_MAX_WORKERS
+        self.max_workers = min(requested, 5)
         # semaphore to limit concurrent external processes (ffmpeg/yt-dlp)
         self._download_semaphore = threading.BoundedSemaphore(self.max_workers)
 
@@ -256,7 +259,7 @@ class MusicDownloaderController:
             else:
                 print(f"[ERROR] download_video falló: {e}")
 
-    def download_multiple_songs(self, song_list, save_path, progress_hook, max_workers=None, log_hook=None, per_file_hook=None):
+    def download_multiple_songs(self, song_list, save_path, progress_hook, max_workers=None, log_hook=None, per_file_hook=None, per_file_progress_hook=None):
         """
         Descarga varias canciones en paralelo usando un pool de hilos.
         song_list: lista de dicts con keys 'title', 'artist', 'format'
@@ -275,7 +278,30 @@ class MusicDownloaderController:
                                           song.get('title'))
                         except Exception:
                             pass
-                    return self.download_song(song["title"], song["artist"], save_path, progress_hook, song["format"], log_hook=log_hook)
+                    # Log thread info for debug
+                    if log_hook:
+                        try:
+                            log_hook(
+                                f"[DEBUG] Starting download idx={idx} title={song.get('title')} thread={threading.current_thread().name}:{threading.get_ident()}")
+                        except Exception:
+                            pass
+
+                    # Create a per-task progress wrapper that informs the caller which index is reporting.
+                    def _task_progress(info):
+                        try:
+                            if per_file_progress_hook:
+                                try:
+                                    per_file_progress_hook(idx, info)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        try:
+                            progress_hook(info)
+                        except Exception:
+                            pass
+
+                    return self.download_song(song["title"], song["artist"], save_path, _task_progress, song["format"], log_hook=log_hook)
                 except Exception as e:
                     if log_hook:
                         try:
