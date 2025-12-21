@@ -6,8 +6,20 @@ from PySide6 import QtWidgets
 
 from src.view_pyside import MusicDownloaderView
 
+# TODO: Estaría bueno que se distingan cuántas canciones se están descargando en paralelo, y tener un progreso para cada una. Luego si, tener el progreso total. Limitemos a 5 canciones en paralelo, para evitar saturar el sistema (evaluar si es posible más).
+# Note: En debug también se debe mostrar de qué hilo se está descargando cada canción.
 # TODO: Agregar un Checkbox para habilitar o no la búsqueda en Spotify y descarga de carátulas
-# FIXME: Arreglar que no se descargan o no se encuentran videos
+# TODO: Evitar que se pueda "Buscar" si se está descargando algo.
+# FIXME: Cuando se tiene un error: ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+#! [ERROR] download_audio falló: ERROR:
+#! [download] Got error: ("Connection broken: ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)", ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+#! [ERROR] download_audio falló: ERROR:
+#! [download] Got error: ("Connection broken: ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)", ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+#! [DEBUG] [FixupM4a] Correcting container of "G:\Rock Nacional\La Secuencia Inicial -Soda Stereo-.m4a"
+# ! Se debe manejar re intentando por segunda vez con ese mismo objetivo, si vuelve a fallar, se deberá mostrar cuando se termina el proceso las canciones que no se pudieron descargar.
+# TODO: Opción para limpiar toda la lista de seleccionados
+# TODO: Botón para cancelar la descarga en curso de manera segura
+# FIXME: Al cerrar la aplicación no se termina el proceso, queda en segundo plano. Hay que asegurarse de cerrar todos los hilos y procesos al salir.
 
 
 def get_spotify_credentials_qt(parent=None):
