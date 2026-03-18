@@ -193,6 +193,9 @@ class MusicDownloaderController:
     def get_search_cache_size(self):
         return self._state_service.get_search_cache_size()
 
+    def get_search_cache_size_bytes(self):
+        return self._state_service.get_search_cache_size_bytes()
+
     def set_cover_search_enabled(self, enabled: bool):
         self.enable_cover = bool(enabled)
         self._config_service.set("enable_cover", self.enable_cover)

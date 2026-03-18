@@ -140,9 +140,6 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         grid.addWidget(self.song_entry, 1, 1)
         grid.addWidget(QtWidgets.QLabel("Artista:"), 2, 0)
         grid.addWidget(self.artist_entry, 2, 1)
-        grid.addWidget(self.youtube_search_checkbox, 3, 0, 1, 2)
-        grid.addWidget(self.spotify_search_checkbox, 4, 0, 1, 2)
-        grid.addWidget(self.cover_search_checkbox, 5, 0, 1, 2)
 
         self.search_button = QtWidgets.QPushButton("Buscar")
         self.search_button.clicked.connect(self.search_thread)
@@ -152,8 +149,12 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.clear_cache_button.clicked.connect(self.clear_search_cache)
         grid.addWidget(self.clear_cache_button, 2, 2)
 
+        grid.addWidget(self.youtube_search_checkbox, 3, 0)
+        grid.addWidget(self.spotify_search_checkbox, 3, 1)
+        grid.addWidget(self.cover_search_checkbox, 3, 2)
+
         self.cache_size_label = QtWidgets.QLabel("")
-        grid.addWidget(self.cache_size_label, 6, 0, 1, 3)
+        grid.addWidget(self.cache_size_label, 4, 0, 1, 3)
 
         # Results and downloads list
         lists_layout = QtWidgets.QHBoxLayout()
@@ -162,6 +163,17 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         left_v = QtWidgets.QVBoxLayout()
         lists_layout.addLayout(left_v)
         left_v.addWidget(QtWidgets.QLabel("Resultados de búsqueda:"))
+
+        legend_layout = QtWidgets.QHBoxLayout()
+        for source, color_hex in [("Spotify", "#1DB954"), ("YouTube", "#FF8C73"), ("Local", "#B0B0B0")]:
+            color_box = QtWidgets.QFrame()
+            color_box.setFixedSize(12, 12)
+            color_box.setStyleSheet(f"background-color: {color_hex};")
+            legend_layout.addWidget(color_box)
+            legend_layout.addWidget(QtWidgets.QLabel(source))
+        legend_layout.addStretch()
+        left_v.addLayout(legend_layout)
+
         self.results_list = QtWidgets.QListWidget()
         left_v.addWidget(self.results_list)
         self.results_list.itemDoubleClicked.connect(self.add_song)
@@ -263,15 +275,24 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         if normalized == "spotify":
             return QtGui.QColor("#1DB954")
         if normalized == "youtube":
-            return QtGui.QColor("#FF4E45")
+            return QtGui.QColor("#FF8C73")
         return QtGui.QColor("#B0B0B0")
+
+    @staticmethod
+    def _format_bytes(bytes_size: int) -> str:
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes_size < 1024.0:
+                return f"{bytes_size:.1f} {unit}"
+            bytes_size /= 1024.0
+        return f"{bytes_size:.1f} TB"
 
     def refresh_cache_size_label(self):
         try:
-            size = self.controller.get_search_cache_size()
+            bytes_size = self.controller.get_search_cache_size_bytes()
+            formatted = self._format_bytes(bytes_size)
         except Exception:
-            size = 0
-        self.cache_size_label.setText(f"Caché de búsquedas: {size}")
+            formatted = "0 B"
+        self.cache_size_label.setText(f"Caché de búsquedas: {formatted}")
 
     def append_log(self, text: str):
         self.log.append(text)

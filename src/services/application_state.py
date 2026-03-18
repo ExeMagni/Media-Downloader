@@ -90,3 +90,17 @@ class ApplicationStateService:
         with self._lock:
             self._prune_search_cache_locked(time.time())
             return len(self._search_cache)
+
+    def get_search_cache_size_bytes(self):
+        import sys
+        with self._lock:
+            self._prune_search_cache_locked(time.time())
+            total_bytes = 0
+            for key, (ts, results) in self._search_cache.items():
+                total_bytes += sys.getsizeof(key)
+                total_bytes += sys.getsizeof(ts)
+                total_bytes += sys.getsizeof(results)
+                for item in results:
+                    if isinstance(item, dict):
+                        total_bytes += sys.getsizeof(item)
+            return total_bytes
