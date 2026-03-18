@@ -77,19 +77,62 @@ class MusicDownloaderController:
             normalized.append(item)
         return normalized
 
+    @staticmethod
+    def _result_signature(item: dict):
+        return (
+            (item.get("title") or "").strip().lower(),
+            (item.get("artist") or "").strip().lower(),
+            (item.get("url") or "").strip().lower(),
+            (item.get("youtube_url") or "").strip().lower(),
+        )
+
+    def _merge_unique_results(self, base_results, extra_results):
+        merged = list(base_results or [])
+        seen = {self._result_signature(item) for item in merged}
+        for item in extra_results or []:
+            signature = self._result_signature(item)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            merged.append(item)
+        return merged
+
+    @staticmethod
+    def _looks_like_url(text: str):
+        lowered = (text or "").strip().lower()
+        return lowered.startswith("http://") or lowered.startswith("https://")
+
     def search_from_inputs(self, query: str, artist: str, title: str):
         query = (query or "").strip()
         artist = (artist or "").strip()
         title = (title or "").strip()
 
-        if title:
-            results = self.search_by_artist_title(
-                artist, title) if artist else self.search(title)
-        elif query:
-            results = self.search(query)
-        else:
+        if not (query or artist or title):
             raise ValueError(
                 "Ingrese un término de búsqueda, canción o artista.")
+
+        # URLs deben buscarse tal cual para no romper detección de YouTube/Spotify.
+        if self._looks_like_url(query):
+            results = self.search(query)
+            results = self._ensure_result_ids(results)
+            self._state_service.set_last_results(results)
+            return list(results)
+
+        combined_query = " ".join(
+            part for part in [query, artist, title] if part)
+        results = []
+
+        # Si hay artista y canción, mantenemos la búsqueda específica y además
+        # combinamos términos para ampliar cobertura de resultados.
+        if artist and title:
+            results = self._merge_unique_results(
+                results,
+                self.search_by_artist_title(artist, title),
+            )
+
+        if combined_query:
+            results = self._merge_unique_results(
+                results, self.search(combined_query))
 
         results = self._ensure_result_ids(results)
         self._state_service.set_last_results(results)

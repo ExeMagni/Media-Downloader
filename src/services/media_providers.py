@@ -76,6 +76,40 @@ class YouTubeProvider:
             "youtube_url": url,
         }
 
+    def search_text_metadata(self, query, limit=10, include_cover=True):
+        search_query = f"ytsearch{max(1, int(limit))}:{query}"
+        ydl_opts = {
+            "quiet": True,
+            "skip_download": True,
+            "default_search": "auto",
+            **self._common_options(),
+        }
+        results = []
+        seen = set()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(search_query, download=False)
+            entries = info.get("entries", []) if isinstance(info, dict) else []
+            for entry in entries:
+                if not entry:
+                    continue
+                title = entry.get("title") or ""
+                artist = entry.get("uploader") or entry.get("channel") or ""
+                youtube_url = entry.get("webpage_url")
+                if not youtube_url and entry.get("id"):
+                    youtube_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                key = (title.strip().lower(), (artist or "").strip(
+                ).lower(), (youtube_url or "").strip().lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append({
+                    "title": title,
+                    "artist": artist,
+                    "youtube_url": youtube_url or "",
+                    "cover_url": entry.get("thumbnail", "") if include_cover else "",
+                })
+        return results
+
     def search_playlist_metadata(self, playlist_url):
         ydl_opts = {
             "quiet": True,

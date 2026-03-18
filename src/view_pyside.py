@@ -9,6 +9,7 @@ import time
 class SearchWorker(QtCore.QObject):
     results = QtCore.Signal(list)
     error = QtCore.Signal(str)
+    finished = QtCore.Signal()
 
     def __init__(self, controller, query, artist, title):
         super().__init__()
@@ -25,6 +26,8 @@ class SearchWorker(QtCore.QObject):
             self.results.emit(results)
         except Exception as e:
             self.error.emit(str(e))
+        finally:
+            self.finished.emit()
 
 
 class DownloadWorker(QtCore.QObject):
@@ -195,6 +198,13 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_item_bars = []
         self.search_thread_qt = None
         self.download_thread_qt = None
+        self.search_has_results = False
+        self.search_completed_with_no_results = False
+
+        self.search_feedback_timer = QtCore.QTimer(self)
+        self.search_feedback_timer.setSingleShot(True)
+        self.search_feedback_timer.timeout.connect(
+            self._on_search_feedback_timeout)
 
     def append_log(self, text: str):
         self.log.append(text)
@@ -214,7 +224,12 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
     def search_thread(self):
         # Avoid stacking search threads if the previous one is still running.
         if self.search_thread_qt is not None and self.search_thread_qt.isRunning():
+            self.status_label.setText("Buscando...")
+            self.append_log("[BUSQUEDA] Ya hay una búsqueda en curso...")
             return
+
+        self.search_has_results = False
+        self.search_completed_with_no_results = False
 
         self.search_button.setEnabled(False)
         # Indicar visualmente que se está realizando la búsqueda
@@ -226,6 +241,16 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         query = self.search_entry.text().strip()
         title = self.song_entry.text().strip()
         artist = self.artist_entry.text().strip()
+        search_context = " | ".join(
+            part for part in [
+                f"Buscar: {query}" if query else "",
+                f"Canción: {title}" if title else "",
+                f"Artista: {artist}" if artist else "",
+            ] if part
+        )
+        self.append_log(
+            f"[BUSQUEDA] Buscando... {search_context or 'sin filtros'}")
+        self.search_feedback_timer.start(10_000)
 
         self.search_worker = SearchWorker(
             self.controller, query, artist, title)
@@ -233,8 +258,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.search_worker.moveToThread(self.search_thread_qt)
         self.search_worker.results.connect(self.on_search_results)
         self.search_worker.error.connect(self.on_search_error)
-        self.search_worker.results.connect(self._stop_search_thread)
-        self.search_worker.error.connect(self._stop_search_thread)
+        self.search_worker.finished.connect(self._stop_search_thread)
         self.search_thread_qt.started.connect(self.search_worker.run)
         self.search_thread_qt.finished.connect(self.search_worker.deleteLater)
         self.search_thread_qt.finished.connect(
@@ -251,19 +275,35 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
                 self.results_list.addItem(f"{artist} - {title}")
             else:
                 self.results_list.addItem(title)
+
+        result_count = len(results)
+        self.search_has_results = result_count > 0
+        self.search_completed_with_no_results = result_count == 0
+
+        # La búsqueda ya terminó: no debemos esperar el timeout para actualizar estado.
+        self.search_feedback_timer.stop()
+        if self.search_has_results:
+            self.status_label.setText("")
+        else:
+            self.status_label.setText(
+                "No se encontraron resultados en la búsqueda")
+
+        self.append_log(
+            f"[BUSQUEDA] Finalizada. Resultados encontrados: {result_count}")
         # Restaurar estado de la UI tras la búsqueda
         self.search_button.setEnabled(True)
         self.search_button.setText("Buscar")
-        self.status_label.setText("")
         # restore search UI state
         QtWidgets.QApplication.restoreOverrideCursor()
 
     def on_search_error(self, msg):
+        self.search_feedback_timer.stop()
         QtWidgets.QMessageBox.critical(self, "Error", msg)
+        self.append_log(f"[BUSQUEDA] Error: {msg}")
         # Restaurar estado de la UI tras el error
         self.search_button.setEnabled(True)
         self.search_button.setText("Buscar")
-        self.status_label.setText("")
+        self.status_label.setText("Error en búsqueda")
         # restore search UI state
         QtWidgets.QApplication.restoreOverrideCursor()
 
@@ -272,6 +312,20 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             self.search_thread_qt.quit()
             self.search_thread_qt.wait()
         self.search_thread_qt = None
+
+    def _on_search_feedback_timeout(self):
+        if self.search_has_results:
+            self.status_label.setText("")
+            return
+
+        if self.search_thread_qt is not None and self.search_thread_qt.isRunning():
+            self.status_label.setText(
+                "La búsqueda está tardando más de lo normal...")
+            return
+
+        if self.search_completed_with_no_results:
+            self.status_label.setText(
+                "No se encontraron resultados en la búsqueda")
 
     def add_song(self, item=None):
         idx = self.results_list.currentRow()
@@ -437,6 +491,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_thread_qt = None
 
     def closeEvent(self, event):
+        self.search_feedback_timer.stop()
         self._stop_search_thread()
         if self.download_thread_qt is not None and self.download_thread_qt.isRunning():
             self.download_thread_qt.quit()

@@ -61,8 +61,9 @@ class SearchUseCaseService:
         results = self._model.search(query)
 
         cached = self._state_service.get_cached_search(query)
-        if cached:
-            return self._merge_unique(results, cached)
+        cached_youtube_results = list(cached or [])
+        if cached_youtube_results:
+            results = self._merge_unique(results, cached_youtube_results)
 
         if self._is_youtube_playlist_url(query):
             youtube_results = self._youtube_provider.search_playlist_metadata(
@@ -86,6 +87,18 @@ class SearchUseCaseService:
             spotify_results = self._model.fetch_spotify_metadata(
                 spotify_api, query)
             results = self._merge_unique(results, spotify_results)
+
+        youtube_results = cached_youtube_results
+        if not youtube_results:
+            youtube_results = self._youtube_provider.search_text_metadata(
+                query=query,
+                limit=10,
+                include_cover=enable_cover,
+            )
+            if youtube_results:
+                self._state_service.set_cached_search(query, youtube_results)
+
+        results = self._merge_unique(results, youtube_results)
 
         return results
 
