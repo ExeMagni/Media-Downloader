@@ -1,10 +1,8 @@
 from PySide6 import QtCore, QtGui, QtWidgets
-import os
 import requests
 from io import BytesIO
 from PIL import Image
 from PIL.ImageQt import ImageQt
-import threading
 import time
 
 
@@ -22,18 +20,8 @@ class SearchWorker(QtCore.QObject):
     @QtCore.Slot()
     def run(self):
         try:
-            if self.title:
-                if self.artist:
-                    results = self.controller.search_by_artist_title(
-                        self.artist, self.title)
-                else:
-                    results = self.controller.search(self.title)
-            elif self.query:
-                results = self.controller.search(self.query)
-            else:
-                self.error.emit(
-                    "Ingrese un término de búsqueda, canción o artista.")
-                return
+            results = self.controller.search_from_inputs(
+                self.query, self.artist, self.title)
             self.results.emit(results)
         except Exception as e:
             self.error.emit(str(e))
@@ -170,6 +158,10 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.remove_button = QtWidgets.QPushButton("Eliminar")
         self.remove_button.clicked.connect(self.remove_song)
         btns_layout.addWidget(self.remove_button)
+        self.clear_selected_button = QtWidgets.QPushButton(
+            "Limpiar seleccionados")
+        self.clear_selected_button.clicked.connect(self.clear_selected_songs)
+        btns_layout.addWidget(self.clear_selected_button)
 
         self.download_button = QtWidgets.QPushButton("Descargar")
         self.download_button.clicked.connect(self.download_thread)
@@ -198,11 +190,9 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         layout.addWidget(self.log)
 
         # Internal state
-        self.song_list = []
-        # Keep widgets and progress bars parallel to `song_list`
+        # Keep widgets and progress bars parallel to the download queue.
         self.download_item_widgets = []
         self.download_item_bars = []
-        self.controller.last_results = []
         self.threads = []
 
     def append_log(self, text: str):
@@ -244,7 +234,6 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
 
     def on_search_results(self, results):
         self.results_list.clear()
-        self.controller.last_results = results
         for r in results:
             artist = r.get('artist', '')
             title = r.get('title', '')
@@ -275,21 +264,14 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(
                 self, "Error", "Seleccione una canción de los resultados.")
             return
-        result = self.controller.last_results[idx]
         fmt = 'mp3' if self.mp3_radio.isChecked() else 'mp4'
-        display = f"({'MP3' if fmt == 'mp3' else 'MP4'}) {result.get('artist', '')} - {result.get('title', '')}"
-        # If result comes from a playlist it may include a youtube_url; add lightweight metadata to model
-        if result.get('youtube_url'):
-            try:
-                self.controller.model.fetch_youtube_metadata(result)
-            except Exception:
-                pass
-        self.song_list.append({
-            'artist': result.get('artist', ''),
-            'title': result.get('title', ''),
-            'format': fmt,
-            'display': display
-        })
+        try:
+            queue_item = self.controller.add_result_to_download_queue(idx, fmt)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Error", str(e))
+            return
+
+        display = queue_item['display']
         # Create list item with embedded progress bar
         item = QtWidgets.QListWidgetItem()
         widget = QtWidgets.QWidget()
@@ -313,7 +295,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         idx = self.downloads_list.currentRow()
         if idx >= 0:
             self.downloads_list.takeItem(idx)
-            self.song_list.pop(idx)
+            self.controller.remove_from_download_queue(idx)
             try:
                 self.download_item_widgets.pop(idx)
             except Exception:
@@ -323,23 +305,22 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
+    def clear_selected_songs(self):
+        # Remove all items from the downloads list and clear internal structures
+        try:
+            self.downloads_list.clear()
+        except Exception:
+            pass
+        self.controller.clear_download_queue()
+        # Clear model/state lists
+        self.download_item_widgets.clear()
+        self.download_item_bars.clear()
+
     def select_all_results(self):
-        results = getattr(self.controller, 'last_results', [])
         fmt = 'mp3' if self.mp3_radio.isChecked() else 'mp4'
-        for r in results:
-            display = f"({'MP3' if fmt == 'mp3' else 'MP4'}) {r.get('artist', '')} - {r.get('title', '')}"
-            # For playlist-fast results, register lightweight entry in model so download uses the youtube_url
-            if r.get('youtube_url'):
-                try:
-                    self.controller.model.fetch_youtube_metadata(r)
-                except Exception:
-                    pass
-            self.song_list.append({
-                'artist': r.get('artist', ''),
-                'title': r.get('title', ''),
-                'format': fmt,
-                'display': display
-            })
+        added_items = self.controller.add_all_results_to_download_queue(fmt)
+        for queue_item in added_items:
+            display = queue_item['display']
             item = QtWidgets.QListWidgetItem()
             widget = QtWidgets.QWidget()
             h = QtWidgets.QHBoxLayout(widget)
@@ -359,7 +340,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             self.download_item_bars.append(bar)
 
     def download_thread(self):
-        if not self.song_list:
+        if self.controller.get_download_queue_size() == 0:
             QtWidgets.QMessageBox.information(
                 self, "Info", "No hay canciones para descargar.")
             return
@@ -371,7 +352,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             return
 
         self.download_worker = DownloadWorker(
-            self.controller, list(self.song_list), save_path)
+            self.controller, self.controller.get_download_queue_snapshot(), save_path)
         self.download_thread_qt = QtCore.QThread()
         self.download_worker.moveToThread(self.download_thread_qt)
         self.download_worker.progress.connect(self.on_progress)

@@ -11,12 +11,16 @@ class Song:
 
 class MediaManager:
     def __init__(self):
-        self.songs = []
+        self._songs = []
         # Index for faster text searches (list of dicts with lowercased fields)
         self._index = []
 
+    @property
+    def songs(self):
+        return list(self._songs)
+
     def add_song(self, song):
-        self.songs.append(song)
+        self._songs.append(song)
         # update index
         try:
             self._index.append({
@@ -74,7 +78,8 @@ class MediaManager:
         return None
 
     def clear_media(self):
-        self.songs.clear()
+        self._songs.clear()
+        self._index.clear()
 
     def fetch_youtube_metadata(self, metadata):
         if not metadata:
@@ -93,7 +98,7 @@ class MediaManager:
             if not existing.get('youtube_url') and youtube_url:
                 existing_song = self.get_song(title, artist)
                 # find object and update
-                for s in self.songs:
+                for s in self._songs:
                     if title.lower() in s.title.lower() and artist.lower() in s.artist.lower():
                         s.youtube_url = youtube_url
                         break
