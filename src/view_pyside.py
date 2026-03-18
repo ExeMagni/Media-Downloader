@@ -107,6 +107,32 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.song_entry.setPlaceholderText("Canción")
         self.artist_entry = QtWidgets.QLineEdit()
         self.artist_entry.setPlaceholderText("Artista")
+        self.youtube_search_checkbox = QtWidgets.QCheckBox(
+            "Buscar en YouTube")
+        self.youtube_search_checkbox.setChecked(
+            self.controller.is_youtube_search_enabled())
+        self.youtube_search_checkbox.setToolTip(
+            "Incluye resultados de YouTube en la búsqueda")
+        self.youtube_search_checkbox.stateChanged.connect(
+            self._on_search_preferences_changed)
+
+        self.spotify_search_checkbox = QtWidgets.QCheckBox(
+            "Buscar en Spotify")
+        self.spotify_search_checkbox.setChecked(
+            self.controller.is_spotify_search_enabled())
+        self.spotify_search_checkbox.setToolTip(
+            "Incluye resultados de Spotify en la búsqueda")
+        self.spotify_search_checkbox.stateChanged.connect(
+            self._on_search_preferences_changed)
+
+        self.cover_search_checkbox = QtWidgets.QCheckBox(
+            "Busqueda con portada")
+        self.cover_search_checkbox.setChecked(
+            self.controller.is_cover_search_enabled())
+        self.cover_search_checkbox.setToolTip(
+            "Si está activo, intenta traer portada/thumbnail en los resultados")
+        self.cover_search_checkbox.stateChanged.connect(
+            self._on_search_preferences_changed)
 
         grid.addWidget(QtWidgets.QLabel("Buscar:"), 0, 0)
         grid.addWidget(self.search_entry, 0, 1)
@@ -114,10 +140,20 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         grid.addWidget(self.song_entry, 1, 1)
         grid.addWidget(QtWidgets.QLabel("Artista:"), 2, 0)
         grid.addWidget(self.artist_entry, 2, 1)
+        grid.addWidget(self.youtube_search_checkbox, 3, 0, 1, 2)
+        grid.addWidget(self.spotify_search_checkbox, 4, 0, 1, 2)
+        grid.addWidget(self.cover_search_checkbox, 5, 0, 1, 2)
 
         self.search_button = QtWidgets.QPushButton("Buscar")
         self.search_button.clicked.connect(self.search_thread)
-        grid.addWidget(self.search_button, 0, 2, 3, 1)
+        grid.addWidget(self.search_button, 0, 2, 2, 1)
+
+        self.clear_cache_button = QtWidgets.QPushButton("Limpiar caché")
+        self.clear_cache_button.clicked.connect(self.clear_search_cache)
+        grid.addWidget(self.clear_cache_button, 2, 2)
+
+        self.cache_size_label = QtWidgets.QLabel("")
+        grid.addWidget(self.cache_size_label, 6, 0, 1, 3)
 
         # Results and downloads list
         lists_layout = QtWidgets.QHBoxLayout()
@@ -129,6 +165,8 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.results_list = QtWidgets.QListWidget()
         left_v.addWidget(self.results_list)
         self.results_list.itemDoubleClicked.connect(self.add_song)
+        self.results_list.currentRowChanged.connect(
+            self.on_result_selection_changed)
 
         mid_v = QtWidgets.QVBoxLayout()
         lists_layout.addLayout(mid_v)
@@ -186,6 +224,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
 
         self.cover_label = QtWidgets.QLabel("Portada")
         self.cover_label.setFixedSize(140, 140)
+        self.cover_label.setAlignment(QtCore.Qt.AlignCenter)
         layout.addWidget(self.cover_label)
 
         self.log = QtWidgets.QTextEdit()
@@ -200,16 +239,52 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_thread_qt = None
         self.search_has_results = False
         self.search_completed_with_no_results = False
+        self.current_search_results = []
 
         self.search_feedback_timer = QtCore.QTimer(self)
         self.search_feedback_timer.setSingleShot(True)
         self.search_feedback_timer.timeout.connect(
             self._on_search_feedback_timeout)
 
+        self.refresh_cache_size_label()
+
+    @staticmethod
+    def _source_label(source: str):
+        normalized = (source or "").strip().lower()
+        if normalized == "spotify":
+            return "Spotify"
+        if normalized == "youtube":
+            return "YouTube"
+        return "Local"
+
+    @staticmethod
+    def _source_color(source: str):
+        normalized = (source or "").strip().lower()
+        if normalized == "spotify":
+            return QtGui.QColor("#1DB954")
+        if normalized == "youtube":
+            return QtGui.QColor("#FF4E45")
+        return QtGui.QColor("#B0B0B0")
+
+    def refresh_cache_size_label(self):
+        try:
+            size = self.controller.get_search_cache_size()
+        except Exception:
+            size = 0
+        self.cache_size_label.setText(f"Caché de búsquedas: {size}")
+
     def append_log(self, text: str):
         self.log.append(text)
 
+    def _set_cover_placeholder(self, text: str):
+        self.cover_label.clear()
+        self.cover_label.setPixmap(QtGui.QPixmap())
+        self.cover_label.setText(text)
+
     def show_cover(self, url):
+        if not url:
+            self._set_cover_placeholder('Sin imagen')
+            return
         try:
             r = requests.get(url, timeout=5)
             r.raise_for_status()
@@ -218,8 +293,38 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             qimg = ImageQt(img)
             pix = QtGui.QPixmap.fromImage(qimg)
             self.cover_label.setPixmap(pix)
+            self.cover_label.setText("")
         except Exception:
-            self.cover_label.setText('Sin imagen')
+            self._set_cover_placeholder('Sin imagen')
+
+    def on_result_selection_changed(self, row: int):
+        if row < 0 or row >= len(self.current_search_results):
+            self._set_cover_placeholder('Portada')
+            return
+
+        result = self.current_search_results[row]
+        cover_url = result.get('cover_url', '')
+        if not self.cover_search_checkbox.isChecked():
+            self._set_cover_placeholder('Busqueda rapida (sin portada)')
+            return
+
+        if not cover_url:
+            self._set_cover_placeholder('Sin imagen')
+            return
+
+        self.show_cover(cover_url)
+
+    def _on_search_preferences_changed(self):
+        """Guarda preferencias de búsqueda cuando cambian los checkboxes."""
+        self.controller.set_youtube_search_enabled(
+            self.youtube_search_checkbox.isChecked()
+        )
+        self.controller.set_spotify_search_enabled(
+            self.spotify_search_checkbox.isChecked()
+        )
+        self.controller.set_cover_search_enabled(
+            self.cover_search_checkbox.isChecked()
+        )
 
     def search_thread(self):
         # Avoid stacking search threads if the previous one is still running.
@@ -232,6 +337,9 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.search_completed_with_no_results = False
 
         self.search_button.setEnabled(False)
+        self.youtube_search_checkbox.setEnabled(False)
+        self.spotify_search_checkbox.setEnabled(False)
+        self.cover_search_checkbox.setEnabled(False)
         # Indicar visualmente que se está realizando la búsqueda
         self.status_label.setText("Buscando...")
         self.search_button.setText("Buscando...")
@@ -241,11 +349,20 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         query = self.search_entry.text().strip()
         title = self.song_entry.text().strip()
         artist = self.artist_entry.text().strip()
+        youtube_enabled = self.youtube_search_checkbox.isChecked()
+        spotify_enabled = self.spotify_search_checkbox.isChecked()
+        cover_enabled = self.cover_search_checkbox.isChecked()
+        self.controller.set_youtube_search_enabled(youtube_enabled)
+        self.controller.set_spotify_search_enabled(spotify_enabled)
+        self.controller.set_cover_search_enabled(cover_enabled)
         search_context = " | ".join(
             part for part in [
                 f"Buscar: {query}" if query else "",
                 f"Canción: {title}" if title else "",
                 f"Artista: {artist}" if artist else "",
+                f"YouTube: {'si' if youtube_enabled else 'no'}",
+                f"Spotify: {'si' if spotify_enabled else 'no'}",
+                f"Portada: {'si' if cover_enabled else 'no'}",
             ] if part
         )
         self.append_log(
@@ -266,15 +383,22 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.search_thread_qt.start()
 
     def on_search_results(self, results):
+        self.current_search_results = list(results or [])
         self.results_list.clear()
-        for r in results:
+        for r in self.current_search_results:
             artist = r.get('artist', '')
             title = r.get('title', '')
+            source_raw = r.get('source', '')
+            source = self._source_label(source_raw)
             # Show only title when artist is empty (playlist fast-load case)
             if artist:
-                self.results_list.addItem(f"{artist} - {title}")
+                text = f"[{source}] {artist} - {title}"
             else:
-                self.results_list.addItem(title)
+                text = f"[{source}] {title}"
+
+            item = QtWidgets.QListWidgetItem(text)
+            item.setForeground(self._source_color(source_raw))
+            self.results_list.addItem(item)
 
         result_count = len(results)
         self.search_has_results = result_count > 0
@@ -290,9 +414,17 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
 
         self.append_log(
             f"[BUSQUEDA] Finalizada. Resultados encontrados: {result_count}")
+        self.refresh_cache_size_label()
         # Restaurar estado de la UI tras la búsqueda
         self.search_button.setEnabled(True)
+        self.youtube_search_checkbox.setEnabled(True)
+        self.spotify_search_checkbox.setEnabled(True)
+        self.cover_search_checkbox.setEnabled(True)
         self.search_button.setText("Buscar")
+        if result_count > 0:
+            self.results_list.setCurrentRow(0)
+        else:
+            self._set_cover_placeholder('Portada')
         # restore search UI state
         QtWidgets.QApplication.restoreOverrideCursor()
 
@@ -300,8 +432,12 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.search_feedback_timer.stop()
         QtWidgets.QMessageBox.critical(self, "Error", msg)
         self.append_log(f"[BUSQUEDA] Error: {msg}")
+        self.refresh_cache_size_label()
         # Restaurar estado de la UI tras el error
         self.search_button.setEnabled(True)
+        self.youtube_search_checkbox.setEnabled(True)
+        self.spotify_search_checkbox.setEnabled(True)
+        self.cover_search_checkbox.setEnabled(True)
         self.search_button.setText("Buscar")
         self.status_label.setText("Error en búsqueda")
         # restore search UI state
@@ -326,6 +462,13 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         if self.search_completed_with_no_results:
             self.status_label.setText(
                 "No se encontraron resultados en la búsqueda")
+
+    def clear_search_cache(self):
+        removed = self.controller.clear_search_cache()
+        self.append_log(
+            f"[CACHE] Caché limpiada. Entradas eliminadas: {removed}")
+        self.status_label.setText("Caché limpiada")
+        self.refresh_cache_size_label()
 
     def add_song(self, item=None):
         idx = self.results_list.currentRow()

@@ -57,22 +57,41 @@ class SearchUseCaseService:
             merged.append(item)
         return merged
 
-    def search(self, query, enable_spotify=False, spotify_api=None, enable_cover=True):
+    @staticmethod
+    def _cached_query_key(query: str, include_cover: bool, include_youtube: bool):
+        return (
+            f"{query}::cover={1 if include_cover else 0}"
+            f"::youtube={1 if include_youtube else 0}"
+        )
+
+    @staticmethod
+    def _artist_title_cache_key(query: str, include_spotify: bool, include_cover: bool):
+        return (
+            f"{query}::spotify={1 if include_spotify else 0}"
+            f"::cover={1 if include_cover else 0}"
+        )
+
+    def search(self, query, enable_spotify=False, spotify_api=None, enable_cover=True, enable_youtube=True):
         results = self._model.search(query)
 
-        cached = self._state_service.get_cached_search(query)
+        cache_key = self._cached_query_key(
+            query,
+            include_cover=enable_cover,
+            include_youtube=enable_youtube,
+        )
+        cached = self._state_service.get_cached_search(cache_key)
         cached_youtube_results = list(cached or [])
         if cached_youtube_results:
             results = self._merge_unique(results, cached_youtube_results)
 
-        if self._is_youtube_playlist_url(query):
+        if enable_youtube and self._is_youtube_playlist_url(query):
             youtube_results = self._youtube_provider.search_playlist_metadata(
                 query)
             results = self._merge_unique(results, youtube_results)
-            self._state_service.set_cached_search(query, youtube_results)
+            self._state_service.set_cached_search(cache_key, youtube_results)
             return results
 
-        if self._is_youtube_url(query):
+        if enable_youtube and self._is_youtube_url(query):
             cleaned = self._remove_list_parameter_if_present(query)
             info = self._youtube_provider.search_video_metadata(
                 url=cleaned,
@@ -88,25 +107,31 @@ class SearchUseCaseService:
                 spotify_api, query)
             results = self._merge_unique(results, spotify_results)
 
-        youtube_results = cached_youtube_results
-        if not youtube_results:
+        youtube_results = cached_youtube_results if enable_youtube else []
+        if enable_youtube and not youtube_results:
             youtube_results = self._youtube_provider.search_text_metadata(
                 query=query,
                 limit=10,
                 include_cover=enable_cover,
             )
             if youtube_results:
-                self._state_service.set_cached_search(query, youtube_results)
+                self._state_service.set_cached_search(
+                    cache_key, youtube_results)
 
         results = self._merge_unique(results, youtube_results)
 
         return results
 
-    def search_by_artist_title(self, artist, title, enable_spotify=False, spotify_api=None):
+    def search_by_artist_title(self, artist, title, enable_spotify=False, spotify_api=None, enable_cover=True):
         query = f"{artist} {title}"
         local_results = self._model.search_by_artist_title(artist, title)
 
-        cached = self._state_service.get_cached_search(query)
+        cache_key = self._artist_title_cache_key(
+            query,
+            include_spotify=enable_spotify,
+            include_cover=enable_cover,
+        )
+        cached = self._state_service.get_cached_search(cache_key)
         if cached:
             return self._merge_unique(local_results, cached)
 
@@ -118,6 +143,6 @@ class SearchUseCaseService:
                 spotify_api, spotify_query)
             results = self._merge_unique(results, spotify_results)
             self._state_service.set_cached_search(
-                spotify_query, spotify_results)
+                cache_key, spotify_results)
 
         return results

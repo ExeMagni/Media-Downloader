@@ -6,6 +6,7 @@ from src.services.media_providers import SpotifyProvider, YouTubeProvider
 from src.services.application_state import ApplicationStateService
 from src.services.download_use_cases import DownloadUseCaseService
 from src.services.search_use_cases import SearchUseCaseService
+from src.services.config_service import ConfigService
 
 # Default max workers: scale with CPU but bounded
 DEFAULT_MAX_WORKERS = min(32, max(4, (os.cpu_count() or 1) * 5))
@@ -13,12 +14,16 @@ DEFAULT_MAX_WORKERS = min(32, max(4, (os.cpu_count() or 1) * 5))
 
 class MusicDownloaderController:
     def __init__(self, model, client_id=None, client_secret=None, max_workers: int = None,
-                 enable_spotify: bool = True, enable_cover: bool = True):
+                 enable_spotify: bool = True, enable_cover: bool = True, enable_youtube: bool = True,
+                 config_service: ConfigService = None):
         self.model = model
         self.spotify_api = None
+        # config service for persistence
+        self._config_service = config_service or ConfigService()
         # feature flags
         self.enable_spotify = enable_spotify
         self.enable_cover = enable_cover
+        self.enable_youtube = enable_youtube
         # Limit concurrent download tasks to avoid saturating the system.
         # Enforce at most 5 concurrent downloads by default (can still be overridden by max_workers arg).
         requested = max_workers or DEFAULT_MAX_WORKERS
@@ -182,12 +187,63 @@ class MusicDownloaderController:
     def get_download_queue_size(self):
         return self._state_service.get_download_queue_size()
 
+    def clear_search_cache(self):
+        return self._state_service.clear_search_cache()
+
+    def get_search_cache_size(self):
+        return self._state_service.get_search_cache_size()
+
+    def set_cover_search_enabled(self, enabled: bool):
+        self.enable_cover = bool(enabled)
+        self._config_service.set("enable_cover", self.enable_cover)
+
+    def is_cover_search_enabled(self):
+        return bool(self.enable_cover)
+
+    def set_spotify_search_enabled(self, enabled: bool):
+        self.enable_spotify = bool(enabled)
+        self._config_service.set("enable_spotify", self.enable_spotify)
+
+    def is_spotify_search_enabled(self):
+        return bool(self.enable_spotify)
+
+    def set_youtube_search_enabled(self, enabled: bool):
+        self.enable_youtube = bool(enabled)
+        self._config_service.set("enable_youtube", self.enable_youtube)
+
+    def is_youtube_search_enabled(self):
+        return bool(self.enable_youtube)
+
+    def get_last_results(self):
+        return self._state_service.get_last_results()
+
+    def save_search_preferences(self):
+        """Persiste todas las preferencias de búsqueda actuales."""
+        self._config_service.set_multiple({
+            "enable_spotify": self.enable_spotify,
+            "enable_cover": self.enable_cover,
+            "enable_youtube": self.enable_youtube,
+        })
+
+    def load_search_preferences(self):
+        """Carga preferencias de búsqueda desde config y actualiza los flags."""
+        self.enable_spotify = bool(
+            self._config_service.get("enable_spotify", self.enable_spotify)
+        )
+        self.enable_cover = bool(
+            self._config_service.get("enable_cover", self.enable_cover)
+        )
+        self.enable_youtube = bool(
+            self._config_service.get("enable_youtube", self.enable_youtube)
+        )
+
     def search(self, query):
         return self._search_use_cases.search(
             query=query,
             enable_spotify=self.enable_spotify,
             spotify_api=self.spotify_api,
             enable_cover=self.enable_cover,
+            enable_youtube=self.enable_youtube,
         )
 
     def search_by_artist_title(self, artist, title):
@@ -196,6 +252,7 @@ class MusicDownloaderController:
             title=title,
             enable_spotify=self.enable_spotify,
             spotify_api=self.spotify_api,
+            enable_cover=self.enable_cover,
         )
 
     def download_song(self, song_title, artist, save_path, progress_hook, format_selected, log_hook=None, youtube_url=None, result_id=None):

@@ -1,5 +1,6 @@
 from src.controller import MusicDownloaderController
 from src.model import MediaManager
+from src.services.config_service import ConfigService
 import os
 import sys
 from PySide6 import QtWidgets
@@ -56,9 +57,18 @@ if __name__ == "__main__":
     client_id, client_secret = get_spotify_credentials_qt()
 
     model = MediaManager()
-    # Deshabilitar búsquedas en Spotify y búsqueda/descarga de carátulas por ahora
-    controller = MusicDownloaderController(model, client_id, client_secret,
-                                           enable_spotify=False, enable_cover=False)
+    config_service = ConfigService()
+    controller = MusicDownloaderController(
+        model,
+        client_id,
+        client_secret,
+        enable_spotify=False,
+        enable_cover=False,
+        enable_youtube=True,
+        config_service=config_service,
+    )
+    # Cargar preferencias guardadas
+    controller.load_search_preferences()
 
     # Crear la ventana principal (la vista se encargará de mostrarla)
     view = MusicDownloaderView(controller)

@@ -1,10 +1,11 @@
 class Song:
-    def __init__(self, title, artist, url, youtube_url=None, result_id=None):
+    def __init__(self, title, artist, url, youtube_url=None, result_id=None, source=None):
         self.title = title
         self.artist = artist
         self.url = url  # Puede ser Spotify, etc.
         self.youtube_url = youtube_url  # Enlace real de YouTube
         self.result_id = result_id
+        self.source = source
 
     def __repr__(self):
         return f"Song(title={self.title}, artist={self.artist}, url={self.url}, youtube_url={self.youtube_url})"
@@ -34,6 +35,19 @@ class MediaManager:
         except Exception:
             pass
 
+    @staticmethod
+    def _infer_source(song):
+        explicit = (getattr(song, 'source', None) or '').strip()
+        if explicit:
+            return explicit
+        url = (getattr(song, 'url', '') or '').lower()
+        youtube_url = (getattr(song, 'youtube_url', '') or '').lower()
+        if 'spotify.com' in url:
+            return 'Spotify'
+        if 'youtube.com' in url or 'youtu.be' in url or 'youtube.com' in youtube_url or 'youtu.be' in youtube_url:
+            return 'YouTube'
+        return 'Local'
+
     def find_song(self, title=None, artist=None):
         results = []
         lt = title.lower() if title else None
@@ -52,7 +66,8 @@ class MediaManager:
                 results.append({'type': 'song', 'title': s.title,
                                 'artist': s.artist, 'url': s.url,
                                 'youtube_url': s.youtube_url,
-                                'result_id': s.result_id})
+                                'result_id': s.result_id,
+                                'source': self._infer_source(s)})
         return results
 
     def search_by_artist_title(self, artist, title):
@@ -65,7 +80,8 @@ class MediaManager:
                 results.append({'type': 'song', 'title': s.title,
                                 'artist': s.artist, 'url': s.url,
                                 'youtube_url': s.youtube_url,
-                                'result_id': s.result_id})
+                                'result_id': s.result_id,
+                                'source': self._infer_source(s)})
         return results
 
     def get_song(self, title, artist, result_id=None):
@@ -80,7 +96,8 @@ class MediaManager:
                         'title': song.title,
                         'artist': song.artist,
                         'youtube_url': song.youtube_url,
-                        'result_id': song.result_id
+                        'result_id': song.result_id,
+                        'source': self._infer_source(song)
                     }
 
         # Prefer exact match first to avoid ambiguous substring matches.
@@ -91,7 +108,8 @@ class MediaManager:
                     'title': song.title,
                     'artist': song.artist,
                     'youtube_url': song.youtube_url,
-                    'result_id': song.result_id
+                    'result_id': song.result_id,
+                    'source': self._infer_source(song)
                 }
 
         for entry in self._index:
@@ -101,7 +119,8 @@ class MediaManager:
                     'title': song.title,
                     'artist': song.artist,
                     'youtube_url': song.youtube_url,
-                    'result_id': song.result_id
+                    'result_id': song.result_id,
+                    'source': self._infer_source(song)
                 }
         return None
 
@@ -116,6 +135,7 @@ class MediaManager:
         title = metadata.get('title')
         artist = metadata.get('artist') or ''
         result_id = metadata.get('result_id')
+        source = metadata.get('source') or 'YouTube'
         youtube_url = metadata.get(
             'youtube_url') or metadata.get('webpage_url') or ''
         if not title:
@@ -138,7 +158,7 @@ class MediaManager:
             return
         # Create Song even if artist is empty; store youtube_url as both url and youtube_url
         song = Song(title, artist, youtube_url,
-                    youtube_url, result_id=result_id)
+                    youtube_url, result_id=result_id, source=source)
         self.add_song(song)
 
     def fetch_spotify_metadata(self, spotify_api, query):
@@ -151,7 +171,8 @@ class MediaManager:
             result_id = item.get('id')
             # Obtener la imagen del álbum
             cover_url = item['album']['images'][0]['url'] if item['album']['images'] else None
-            song = Song(title, artist, url, result_id=result_id)
+            song = Song(title, artist, url,
+                        result_id=result_id, source='Spotify')
             self.add_song(song)
             results.append({
                 'type': 'song',
@@ -159,6 +180,7 @@ class MediaManager:
                 'artist': artist,
                 'url': url,
                 'cover_url': cover_url,
-                'result_id': result_id
+                'result_id': result_id,
+                'source': 'Spotify'
             })
         return results

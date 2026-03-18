@@ -74,6 +74,7 @@ class YouTubeProvider:
             "title": info.get("title", ""),
             "cover_url": info.get("thumbnail", "") if include_cover else "",
             "youtube_url": url,
+            "source": "YouTube",
         }
 
     def search_text_metadata(self, query, limit=10, include_cover=True):
@@ -107,6 +108,7 @@ class YouTubeProvider:
                     "artist": artist,
                     "youtube_url": youtube_url or "",
                     "cover_url": entry.get("thumbnail", "") if include_cover else "",
+                    "source": "YouTube",
                 })
         return results
 
@@ -138,6 +140,7 @@ class YouTubeProvider:
                     "title": title,
                     "artist": "",
                     "youtube_url": webpage or "",
+                    "source": "YouTube",
                 })
         return results
 

@@ -3,12 +3,29 @@ import time
 
 
 class ApplicationStateService:
-    def __init__(self, cache_ttl_seconds: int = 300):
+    def __init__(self, cache_ttl_seconds: int = 300, max_cache_entries: int = 200):
         self._lock = threading.RLock()
         self._last_results = []
         self._download_queue = []
         self._search_cache = {}
         self._cache_ttl_seconds = cache_ttl_seconds
+        self._max_cache_entries = max(1, int(max_cache_entries))
+
+    def _prune_search_cache_locked(self, now=None):
+        now_ts = now if now is not None else time.time()
+        expired_keys = []
+        for key, (ts, _) in self._search_cache.items():
+            if now_ts - ts >= self._cache_ttl_seconds:
+                expired_keys.append(key)
+        for key in expired_keys:
+            self._search_cache.pop(key, None)
+
+        overflow = len(self._search_cache) - self._max_cache_entries
+        if overflow > 0:
+            ordered = sorted(self._search_cache.items(),
+                             key=lambda item: item[1][0])
+            for key, _ in ordered[:overflow]:
+                self._search_cache.pop(key, None)
 
     def get_last_results(self):
         with self._lock:
@@ -47,6 +64,7 @@ class ApplicationStateService:
     def get_cached_search(self, key: str):
         now = time.time()
         with self._lock:
+            self._prune_search_cache_locked(now)
             cached = self._search_cache.get(key)
             if not cached:
                 return None
@@ -58,4 +76,17 @@ class ApplicationStateService:
 
     def set_cached_search(self, key: str, results):
         with self._lock:
-            self._search_cache[key] = (time.time(), list(results or []))
+            now = time.time()
+            self._search_cache[key] = (now, list(results or []))
+            self._prune_search_cache_locked(now)
+
+    def clear_search_cache(self):
+        with self._lock:
+            removed = len(self._search_cache)
+            self._search_cache.clear()
+            return removed
+
+    def get_search_cache_size(self):
+        with self._lock:
+            self._prune_search_cache_locked(time.time())
+            return len(self._search_cache)
