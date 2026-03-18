@@ -311,16 +311,18 @@ class MusicDownloaderController:
                 print(f"[ERROR] download_video falló: {e}")
             raise
 
-    def download_multiple_songs(self, song_list, save_path, progress_hook, max_workers=None, log_hook=None, per_file_hook=None, per_file_progress_hook=None):
+    def download_multiple_songs(self, song_list, save_path, progress_hook, max_workers=None, log_hook=None, per_file_hook=None, per_file_progress_hook=None, per_file_done_hook=None):
         """
         Descarga varias canciones en paralelo usando un pool de hilos.
         song_list: lista de dicts con keys 'title', 'artist', 'format'
         """
         workers = max_workers if max_workers else self.max_workers
         failed_downloads = []
+        total_songs = len(song_list)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = []
+            future_meta = {}
 
             def _task(idx, song):
                 # Notify per-file start if hook provided
@@ -377,13 +379,41 @@ class MusicDownloaderController:
                     raise
 
             for idx, song in enumerate(song_list):
-                futures.append(executor.submit(_task, idx, song))
+                future = executor.submit(_task, idx, song)
+                futures.append(future)
+                future_meta[future] = {
+                    "idx": idx,
+                    "title": song.get("title", ""),
+                }
 
+            completed = 0
             for f in concurrent.futures.as_completed(futures):
+                meta = future_meta.get(f, {})
+                idx = meta.get("idx", -1)
+                title = meta.get("title", "")
+                ok = True
+                error_message = ""
                 try:
                     f.result()
                 except Exception as e:
-                    failed_downloads.append(str(e))
+                    ok = False
+                    error_message = str(e)
+                    failed_downloads.append(error_message)
+                finally:
+                    completed += 1
+                    if per_file_done_hook:
+                        try:
+                            per_file_done_hook(
+                                idx,
+                                total_songs,
+                                completed,
+                                len(failed_downloads),
+                                ok,
+                                title,
+                                error_message,
+                            )
+                        except Exception:
+                            pass
 
         if failed_downloads:
             unique_errors = list(dict.fromkeys(failed_downloads))

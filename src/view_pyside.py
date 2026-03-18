@@ -40,6 +40,8 @@ class DownloadWorker(QtCore.QObject):
     file_progress = QtCore.Signal(int, object)
     # Emit overall progress percent (0-100)
     overall_progress = QtCore.Signal(int)
+    # Emit aggregate stats: completed, total, failed
+    download_stats = QtCore.Signal(int, int, int)
 
     def __init__(self, controller, song_list, save_path):
         super().__init__()
@@ -64,11 +66,6 @@ class DownloadWorker(QtCore.QObject):
                     self.file_started.emit(idx, total, title)
                 except Exception:
                     pass
-                try:
-                    pct = int((idx) / total * 100) if total > 0 else 0
-                    self.overall_progress.emit(pct)
-                except Exception:
-                    pass
 
             # per-file progress hook: emit index + progress info
             def per_file_progress_hook(idx, info):
@@ -77,10 +74,23 @@ class DownloadWorker(QtCore.QObject):
                 except Exception:
                     pass
 
+            # per-file done hook: update completion-based progress and failures count
+            def per_file_done_hook(idx, total, completed, failed, ok, title, error_message):
+                try:
+                    pct = int((completed) / total * 100) if total > 0 else 0
+                    self.overall_progress.emit(pct)
+                except Exception:
+                    pass
+                try:
+                    self.download_stats.emit(completed, total, failed)
+                except Exception:
+                    pass
+
             self.controller.download_multiple_songs(
                 self.song_list, self.save_path, self.progress_hook,
                 log_hook=self.log.emit, per_file_hook=per_file_hook,
-                per_file_progress_hook=per_file_progress_hook)
+                per_file_progress_hook=per_file_progress_hook,
+                per_file_done_hook=per_file_done_hook)
             elapsed = time.time() - start_time
             self.finished.emit(True, f"Duración: {elapsed:.2f}s")
         except Exception as e:
@@ -162,23 +172,29 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
 
         left_v = QtWidgets.QVBoxLayout()
         lists_layout.addLayout(left_v)
-        left_v.addWidget(QtWidgets.QLabel("Resultados de búsqueda:"))
 
+        left_header = QtWidgets.QHBoxLayout()
+        left_header.addWidget(QtWidgets.QLabel("Resultados de búsqueda:"))
         legend_layout = QtWidgets.QHBoxLayout()
+        legend_layout.setContentsMargins(10, 0, 0, 0)
         for source, color_hex in [("Spotify", "#1DB954"), ("YouTube", "#FF8C73"), ("Local", "#B0B0B0")]:
             color_box = QtWidgets.QFrame()
-            color_box.setFixedSize(12, 12)
+            color_box.setFixedSize(14, 14)
             color_box.setStyleSheet(f"background-color: {color_hex};")
             legend_layout.addWidget(color_box)
-            legend_layout.addWidget(QtWidgets.QLabel(source))
+            legend_label = QtWidgets.QLabel(source)
+            legend_label.setStyleSheet("font-size: 12px; margin-left: 2px;")
+            legend_layout.addWidget(legend_label)
         legend_layout.addStretch()
-        left_v.addLayout(legend_layout)
+        left_header.addLayout(legend_layout)
+        left_v.addLayout(left_header)
 
         self.results_list = QtWidgets.QListWidget()
         left_v.addWidget(self.results_list)
         self.results_list.itemDoubleClicked.connect(self.add_song)
         self.results_list.currentRowChanged.connect(
             self.on_result_selection_changed)
+        left_v.addStretch()
 
         mid_v = QtWidgets.QVBoxLayout()
         lists_layout.addLayout(mid_v)
@@ -199,6 +215,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.downloads_list = QtWidgets.QListWidget()
         right_v.addWidget(self.downloads_list)
         self.downloads_list.itemDoubleClicked.connect(self.remove_song)
+        right_v.addStretch()
 
         btns_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(btns_layout)
@@ -252,6 +269,8 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.search_has_results = False
         self.search_completed_with_no_results = False
         self.current_search_results = []
+        self._download_failed_count = 0
+        self._download_total_count = 0
 
         self.search_feedback_timer = QtCore.QTimer(self)
         self.search_feedback_timer.setSingleShot(True)
@@ -595,9 +614,16 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_worker.file_started.connect(self.on_file_started)
         self.download_worker.file_progress.connect(self.on_file_progress)
         self.download_worker.overall_progress.connect(self.on_overall_progress)
+        self.download_worker.download_stats.connect(self.on_download_stats)
         self.download_worker.finished.connect(self.on_finished)
         self.download_thread_qt.started.connect(self.download_worker.run)
         self.download_thread_qt.start()
+        self._download_failed_count = 0
+        self._download_total_count = self.controller.get_download_queue_size()
+        self.current_file_label.setText(
+            f"Completadas 0/{self._download_total_count} | Errores: 0")
+        self.overall_progress_bar.setVisible(True)
+        self.overall_progress_bar.setValue(0)
         self.append_log(f"Iniciando descarga en: {save_path}")
 
     def on_progress(self, info):
@@ -607,12 +633,10 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
 
     def on_file_started(self, idx, total, title):
         # idx is 0-based
-        # Show only progress count (do not display current file title)
-        self.current_file_label.setText(f"Descargando {idx+1}/{total}")
+        # Keep a short processing hint while aggregate stats are updated on completion.
+        self.current_file_label.setText(
+            f"Procesando {idx+1}/{total} | Errores: {self._download_failed_count}")
         self.overall_progress_bar.setVisible(True)
-        # represent completed files proportionally
-        pct = int((idx) / total * 100) if total > 0 else 0
-        self.overall_progress_bar.setValue(pct)
         # Ensure the corresponding per-item bar is reset/visible
         try:
             if idx < len(self.download_item_bars):
@@ -623,6 +647,12 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
     def on_overall_progress(self, percent):
         # percent 0-100
         self.overall_progress_bar.setValue(percent)
+
+    def on_download_stats(self, completed, total, failed):
+        self._download_failed_count = failed
+        self._download_total_count = total
+        self.current_file_label.setText(
+            f"Completadas {completed}/{total} | Errores: {failed}")
 
     def on_file_progress(self, idx, info):
         # Update the specific per-item progress bar using info dict
@@ -644,8 +674,15 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
 
     def on_finished(self, success, message):
         self.append_log(f"Finalizado: success={success} message={message}")
+        if self._download_total_count > 0:
+            self.overall_progress_bar.setValue(100)
+            if self._download_failed_count > 0:
+                self.current_file_label.setText(
+                    f"Finalizado con errores: {self._download_failed_count}/{self._download_total_count}")
+            else:
+                self.current_file_label.setText(
+                    f"Finalizado OK: {self._download_total_count}/{self._download_total_count}")
         self.overall_progress_bar.setVisible(False)
-        self.current_file_label.setText("")
         if not success:
             QtWidgets.QMessageBox.warning(
                 self, "Descarga con errores", message)
