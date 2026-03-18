@@ -193,7 +193,8 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         # Keep widgets and progress bars parallel to the download queue.
         self.download_item_widgets = []
         self.download_item_bars = []
-        self.threads = []
+        self.search_thread_qt = None
+        self.download_thread_qt = None
 
     def append_log(self, text: str):
         self.log.append(text)
@@ -211,6 +212,10 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             self.cover_label.setText('Sin imagen')
 
     def search_thread(self):
+        # Avoid stacking search threads if the previous one is still running.
+        if self.search_thread_qt is not None and self.search_thread_qt.isRunning():
+            return
+
         self.search_button.setEnabled(False)
         # Indicar visualmente que se está realizando la búsqueda
         self.status_label.setText("Buscando...")
@@ -228,9 +233,13 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.search_worker.moveToThread(self.search_thread_qt)
         self.search_worker.results.connect(self.on_search_results)
         self.search_worker.error.connect(self.on_search_error)
+        self.search_worker.results.connect(self._stop_search_thread)
+        self.search_worker.error.connect(self._stop_search_thread)
         self.search_thread_qt.started.connect(self.search_worker.run)
+        self.search_thread_qt.finished.connect(self.search_worker.deleteLater)
+        self.search_thread_qt.finished.connect(
+            self.search_thread_qt.deleteLater)
         self.search_thread_qt.start()
-        self.threads.append(self.search_thread_qt)
 
     def on_search_results(self, results):
         self.results_list.clear()
@@ -257,6 +266,12 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.status_label.setText("")
         # restore search UI state
         QtWidgets.QApplication.restoreOverrideCursor()
+
+    def _stop_search_thread(self):
+        if self.search_thread_qt is not None and self.search_thread_qt.isRunning():
+            self.search_thread_qt.quit()
+            self.search_thread_qt.wait()
+        self.search_thread_qt = None
 
     def add_song(self, item=None):
         idx = self.results_list.currentRow()
@@ -365,7 +380,6 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_worker.finished.connect(self.on_finished)
         self.download_thread_qt.started.connect(self.download_worker.run)
         self.download_thread_qt.start()
-        self.threads.append(self.download_thread_qt)
         self.append_log(f"Iniciando descarga en: {save_path}")
 
     def on_progress(self, info):
@@ -414,6 +428,18 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.append_log(f"Finalizado: success={success} message={message}")
         self.overall_progress_bar.setVisible(False)
         self.current_file_label.setText("")
+        if not success:
+            QtWidgets.QMessageBox.warning(
+                self, "Descarga con errores", message)
         if hasattr(self, 'download_thread_qt') and self.download_thread_qt.isRunning():
             self.download_thread_qt.quit()
             self.download_thread_qt.wait()
+        self.download_thread_qt = None
+
+    def closeEvent(self, event):
+        self._stop_search_thread()
+        if self.download_thread_qt is not None and self.download_thread_qt.isRunning():
+            self.download_thread_qt.quit()
+            self.download_thread_qt.wait()
+        self.download_thread_qt = None
+        super().closeEvent(event)

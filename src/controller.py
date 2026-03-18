@@ -1,6 +1,7 @@
 import threading
 import concurrent.futures
 import os
+from uuid import uuid4
 from src.services.media_providers import SpotifyProvider, YouTubeProvider
 from src.services.application_state import ApplicationStateService
 from src.services.download_use_cases import DownloadUseCaseService
@@ -61,8 +62,20 @@ class MusicDownloaderController:
             "artist": artist,
             "title": title,
             "format": fmt,
-            "display": f"({fmt_label}) {artist} - {title}"
+            "display": f"({fmt_label}) {artist} - {title}",
+            "youtube_url": result.get("youtube_url", ""),
+            "result_id": result.get("result_id")
         }
+
+    @staticmethod
+    def _ensure_result_ids(results):
+        normalized = []
+        for result in results or []:
+            item = dict(result)
+            if not item.get("result_id"):
+                item["result_id"] = str(uuid4())
+            normalized.append(item)
+        return normalized
 
     def search_from_inputs(self, query: str, artist: str, title: str):
         query = (query or "").strip()
@@ -78,6 +91,7 @@ class MusicDownloaderController:
             raise ValueError(
                 "Ingrese un término de búsqueda, canción o artista.")
 
+        results = self._ensure_result_ids(results)
         self._state_service.set_last_results(results)
         return list(results)
 
@@ -141,21 +155,23 @@ class MusicDownloaderController:
             spotify_api=self.spotify_api,
         )
 
-    def download_song(self, song_title, artist, save_path, progress_hook, format_selected, log_hook=None):
+    def download_song(self, song_title, artist, save_path, progress_hook, format_selected, log_hook=None, youtube_url=None, result_id=None):
         if format_selected == "mp3":
             self.download_audio(song_title, artist, save_path,
-                                progress_hook, log_hook=log_hook)
+                                progress_hook, log_hook=log_hook, youtube_url=youtube_url, result_id=result_id)
         elif format_selected == "mp4":
             self.download_video(song_title, artist, save_path,
-                                progress_hook, log_hook=log_hook)
+                                progress_hook, log_hook=log_hook, youtube_url=youtube_url, result_id=result_id)
 
-    def download_audio(self, song_title, artist, save_path, progress_hook, log_hook=None):
+    def download_audio(self, song_title, artist, save_path, progress_hook, log_hook=None, youtube_url=None, result_id=None):
         # Limit concurrent downloads at process level
         try:
             with self._download_semaphore:
                 self._download_use_cases.download_audio_by_title_artist(
                     song_title=song_title,
                     artist=artist,
+                    youtube_url=youtube_url,
+                    result_id=result_id,
                     save_path=save_path,
                     progress_hook=progress_hook,
                     log_hook=log_hook,
@@ -168,13 +184,16 @@ class MusicDownloaderController:
                     pass
             else:
                 print(f"[ERROR] download_audio falló: {e}")
+            raise
 
-    def download_video(self, video_title, artist, save_path, progress_hook, log_hook=None):
+    def download_video(self, video_title, artist, save_path, progress_hook, log_hook=None, youtube_url=None, result_id=None):
         try:
             with self._download_semaphore:
                 self._download_use_cases.download_video_by_title_artist(
                     video_title=video_title,
                     artist=artist,
+                    youtube_url=youtube_url,
+                    result_id=result_id,
                     save_path=save_path,
                     progress_hook=progress_hook,
                     log_hook=log_hook,
@@ -187,6 +206,7 @@ class MusicDownloaderController:
                     pass
             else:
                 print(f"[ERROR] download_video falló: {e}")
+            raise
 
     def download_multiple_songs(self, song_list, save_path, progress_hook, max_workers=None, log_hook=None, per_file_hook=None, per_file_progress_hook=None):
         """
@@ -194,6 +214,7 @@ class MusicDownloaderController:
         song_list: lista de dicts con keys 'title', 'artist', 'format'
         """
         workers = max_workers if max_workers else self.max_workers
+        failed_downloads = []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = []
@@ -230,7 +251,16 @@ class MusicDownloaderController:
                         except Exception:
                             pass
 
-                    return self.download_song(song["title"], song["artist"], save_path, _task_progress, song["format"], log_hook=log_hook)
+                    return self.download_song(
+                        song["title"],
+                        song["artist"],
+                        save_path,
+                        _task_progress,
+                        song["format"],
+                        log_hook=log_hook,
+                        youtube_url=song.get("youtube_url"),
+                        result_id=song.get("result_id"),
+                    )
                 except Exception as e:
                     if log_hook:
                         try:
@@ -241,6 +271,7 @@ class MusicDownloaderController:
                     else:
                         print(
                             f"[ERROR] descarga de {song.get('title')} falló: {e}")
+                    raise
 
             for idx, song in enumerate(song_list):
                 futures.append(executor.submit(_task, idx, song))
@@ -249,4 +280,12 @@ class MusicDownloaderController:
                 try:
                     f.result()
                 except Exception as e:
-                    print(f"[ERROR] tarea en pool falló: {e}")
+                    failed_downloads.append(str(e))
+
+        if failed_downloads:
+            unique_errors = list(dict.fromkeys(failed_downloads))
+            summary = "; ".join(unique_errors[:3])
+            if len(unique_errors) > 3:
+                summary += "; ..."
+            raise RuntimeError(
+                f"Fallaron {len(failed_downloads)} descargas. {summary}")

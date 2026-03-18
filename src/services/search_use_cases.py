@@ -34,18 +34,40 @@ class SearchUseCaseService:
         except Exception:
             return query
 
+    @staticmethod
+    def _result_key(item):
+        result_id = (item.get("result_id") or "").strip().lower()
+        if result_id:
+            return (result_id,)
+        return (
+            (item.get("title") or "").strip().lower(),
+            (item.get("artist") or "").strip().lower(),
+            (item.get("url") or "").strip().lower(),
+            (item.get("youtube_url") or "").strip().lower(),
+        )
+
+    def _merge_unique(self, base_results, extra_results):
+        merged = list(base_results or [])
+        seen = {self._result_key(item) for item in merged}
+        for item in extra_results or []:
+            key = self._result_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        return merged
+
     def search(self, query, enable_spotify=False, spotify_api=None, enable_cover=True):
         results = self._model.search(query)
 
         cached = self._state_service.get_cached_search(query)
         if cached:
-            results.extend(cached)
-            return results
+            return self._merge_unique(results, cached)
 
         if self._is_youtube_playlist_url(query):
             youtube_results = self._youtube_provider.search_playlist_metadata(
                 query)
-            results.extend(youtube_results)
+            results = self._merge_unique(results, youtube_results)
             self._state_service.set_cached_search(query, youtube_results)
             return results
 
@@ -63,23 +85,25 @@ class SearchUseCaseService:
         if enable_spotify and spotify_api:
             spotify_results = self._model.fetch_spotify_metadata(
                 spotify_api, query)
-            results.extend(spotify_results)
+            results = self._merge_unique(results, spotify_results)
 
         return results
 
     def search_by_artist_title(self, artist, title, enable_spotify=False, spotify_api=None):
         query = f"{artist} {title}"
+        local_results = self._model.search_by_artist_title(artist, title)
+
         cached = self._state_service.get_cached_search(query)
         if cached:
-            return cached
+            return self._merge_unique(local_results, cached)
 
-        results = self._model.search_by_artist_title(artist, title)
+        results = list(local_results)
 
         if enable_spotify and spotify_api:
             spotify_query = f"{artist} {title}"
             spotify_results = self._model.fetch_spotify_metadata(
                 spotify_api, spotify_query)
-            results.extend(spotify_results)
+            results = self._merge_unique(results, spotify_results)
             self._state_service.set_cached_search(
                 spotify_query, spotify_results)
 
