@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from PySide6 import QtCore, QtGui, QtWidgets
 import requests
 from io import BytesIO
@@ -30,6 +32,28 @@ class SearchWorker(QtCore.QObject):
             self.finished.emit()
 
 
+class CoverWorker(QtCore.QRunnable):
+    class Signals(QtCore.QObject):
+        finished = QtCore.Signal(QtGui.QImage, str)
+
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+        self.signals = self.Signals()
+
+    def run(self):
+        try:
+            r = requests.get(self.url, timeout=5)
+            r.raise_for_status()
+            img = Image.open(BytesIO(r.content)).convert('RGBA')
+            img = img.resize((140, 140))
+            qimg = ImageQt(img)
+            # Se copia la imagen para transferirla de manera segura al hilo principal
+            self.signals.finished.emit(QtGui.QImage(qimg).copy(), self.url)
+        except Exception:
+            self.signals.finished.emit(QtGui.QImage(), self.url)
+
+
 class DownloadWorker(QtCore.QObject):
     progress = QtCore.Signal(object)
     finished = QtCore.Signal(bool, str)
@@ -42,6 +66,8 @@ class DownloadWorker(QtCore.QObject):
     overall_progress = QtCore.Signal(int)
     # Emit aggregate stats: completed, total, failed
     download_stats = QtCore.Signal(int, int, int)
+    # Emitted when a file is completely finished (success/fail)
+    file_done = QtCore.Signal(int, bool)
 
     def __init__(self, controller, song_list, save_path):
         super().__init__()
@@ -77,6 +103,10 @@ class DownloadWorker(QtCore.QObject):
             # per-file done hook: update completion-based progress and failures count
             def per_file_done_hook(idx, total, completed, failed, ok, title, error_message):
                 try:
+                    self.file_done.emit(idx, ok)
+                except Exception:
+                    pass
+                try:
                     pct = int((completed) / total * 100) if total > 0 else 0
                     self.overall_progress.emit(pct)
                 except Exception:
@@ -97,12 +127,40 @@ class DownloadWorker(QtCore.QObject):
             self.finished.emit(False, str(e))
 
 
+class UpdateWorker(QtCore.QObject):
+    finished = QtCore.Signal(bool, str)
+    log = QtCore.Signal(str)
+
+    @QtCore.Slot()
+    def run(self):
+        try:
+            self.log.emit("[UPDATE] Iniciando actualización de yt-dlp...")
+            cmd = [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"]
+            kwargs = {}
+            # Evitar que se abra una ventana de consola extra en Windows
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=True, **kwargs)
+            self.log.emit(f"[UPDATE]\n{result.stdout}")
+            self.finished.emit(
+                True, "Motor de descarga (yt-dlp) actualizado correctamente.")
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Error al actualizar: {e.stderr}"
+            self.log.emit(f"[UPDATE ERROR]\n{error_msg}")
+            self.finished.emit(False, error_msg)
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+
 class MusicDownloaderView(QtWidgets.QMainWindow):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
         self.setWindowTitle("Music Downloader")
         self.resize(900, 600)
+        self.cover_cache = {}
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -164,7 +222,13 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         grid.addWidget(self.cover_search_checkbox, 3, 2)
 
         self.cache_size_label = QtWidgets.QLabel("")
-        grid.addWidget(self.cache_size_label, 4, 0, 1, 3)
+        grid.addWidget(self.cache_size_label, 4, 0, 1, 2)
+
+        self.update_button = QtWidgets.QPushButton("Actualizar motor (yt-dlp)")
+        self.update_button.setToolTip(
+            "Actualiza yt-dlp para solucionar problemas de descarga")
+        self.update_button.clicked.connect(self.update_ytdlp)
+        grid.addWidget(self.update_button, 4, 2)
 
         # Results and downloads list
         lists_layout = QtWidgets.QHBoxLayout()
@@ -325,17 +389,30 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         if not url:
             self._set_cover_placeholder('Sin imagen')
             return
-        try:
-            r = requests.get(url, timeout=5)
-            r.raise_for_status()
-            img = Image.open(BytesIO(r.content)).convert('RGBA')
-            img = img.resize((140, 140))
-            qimg = ImageQt(img)
-            pix = QtGui.QPixmap.fromImage(qimg)
-            self.cover_label.setPixmap(pix)
+
+        if url in self.cover_cache:
+            self.cover_label.setPixmap(self.cover_cache[url])
             self.cover_label.setText("")
-        except Exception:
-            self._set_cover_placeholder('Sin imagen')
+            return
+
+        self._set_cover_placeholder('Cargando...')
+        worker = CoverWorker(url)
+        worker.signals.finished.connect(self._on_cover_downloaded)
+        QtCore.QThreadPool.globalInstance().start(worker)
+
+    def _on_cover_downloaded(self, qimage, url):
+        if not qimage.isNull():
+            pixmap = QtGui.QPixmap.fromImage(qimage)
+            self.cover_cache[url] = pixmap
+
+        current_row = self.results_list.currentRow()
+        if current_row >= 0 and current_row < len(self.current_search_results):
+            if self.current_search_results[current_row].get('cover_url') == url:
+                if qimage.isNull():
+                    self._set_cover_placeholder('Sin imagen')
+                else:
+                    self.cover_label.setPixmap(self.cover_cache[url])
+                    self.cover_label.setText("")
 
     def on_result_selection_changed(self, row: int):
         if row < 0 or row >= len(self.current_search_results):
@@ -371,6 +448,11 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         if self.search_thread_qt is not None and self.search_thread_qt.isRunning():
             self.status_label.setText("Buscando...")
             self.append_log("[BUSQUEDA] Ya hay una búsqueda en curso...")
+            return
+
+        if self.download_thread_qt is not None and self.download_thread_qt.isRunning():
+            QtWidgets.QMessageBox.warning(
+                self, "Descarga en curso", "No se puede buscar mientras hay una descarga en progreso.")
             return
 
         self.search_has_results = False
@@ -533,6 +615,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         bar.setRange(0, 100)
         bar.setValue(0)
         bar.setFixedWidth(160)
+        bar.setFormat("%p%")
         h.addWidget(lbl)
         h.addStretch()
         h.addWidget(bar)
@@ -581,6 +664,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             bar.setRange(0, 100)
             bar.setValue(0)
             bar.setFixedWidth(160)
+            bar.setFormat("%p%")
             h.addWidget(lbl)
             h.addStretch()
             h.addWidget(bar)
@@ -615,6 +699,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.download_worker.file_progress.connect(self.on_file_progress)
         self.download_worker.overall_progress.connect(self.on_overall_progress)
         self.download_worker.download_stats.connect(self.on_download_stats)
+        self.download_worker.file_done.connect(self.on_file_done)
         self.download_worker.finished.connect(self.on_finished)
         self.download_thread_qt.started.connect(self.download_worker.run)
         self.download_thread_qt.start()
@@ -664,11 +749,30 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
                 downloaded = info.get('downloaded_bytes')
                 if total and downloaded is not None and total > 0:
                     percent = int(downloaded * 100 / total)
+                    # Limitar a 99% mientras descarga; el 100% se fija al terminar todo el proceso.
+                    percent = min(percent, 99)
+
                     if idx < len(self.download_item_bars):
-                        self.download_item_bars[idx].setValue(percent)
-            elif status == 'finished':
+                        bar = self.download_item_bars[idx]
+                        # Prevenir que la barra retroceda en descargas multi-flujo
+                        if percent > bar.value():
+                            bar.setValue(percent)
+            elif status == 'retrying':
                 if idx < len(self.download_item_bars):
-                    self.download_item_bars[idx].setValue(100)
+                    bar = self.download_item_bars[idx]
+                    bar.setValue(0)
+                    bar.setFormat("%p%")
+        except Exception:
+            pass
+
+    def on_file_done(self, idx, ok):
+        try:
+            if idx < len(self.download_item_bars):
+                bar = self.download_item_bars[idx]
+                if ok:
+                    bar.setValue(100)
+                else:
+                    bar.setFormat("Error")
         except Exception:
             pass
 
@@ -691,6 +795,40 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             self.download_thread_qt.wait()
         self.download_thread_qt = None
 
+    def update_ytdlp(self):
+        if hasattr(self, 'update_thread_qt') and self.update_thread_qt is not None and self.update_thread_qt.isRunning():
+            return
+
+        self.update_button.setEnabled(False)
+        self.update_button.setText("Actualizando...")
+        self.status_label.setText("Actualizando yt-dlp...")
+
+        self.update_worker = UpdateWorker()
+        self.update_thread_qt = QtCore.QThread()
+        self.update_worker.moveToThread(self.update_thread_qt)
+
+        self.update_worker.log.connect(self.append_log)
+        self.update_worker.finished.connect(self.on_update_finished)
+        self.update_worker.finished.connect(self.update_thread_qt.quit)
+        self.update_worker.finished.connect(self.update_worker.deleteLater)
+        self.update_thread_qt.finished.connect(
+            self.update_thread_qt.deleteLater)
+
+        self.update_thread_qt.started.connect(self.update_worker.run)
+        self.update_thread_qt.start()
+
+    def on_update_finished(self, success, message):
+        self.update_button.setEnabled(True)
+        self.update_button.setText("Actualizar motor (yt-dlp)")
+        self.status_label.setText(
+            "Actualización completada" if success else "Error en actualización")
+
+        if success:
+            QtWidgets.QMessageBox.information(self, "Actualización", message)
+        else:
+            QtWidgets.QMessageBox.warning(
+                self, "Actualización", f"No se pudo actualizar:\n{message}")
+
     def closeEvent(self, event):
         self.search_feedback_timer.stop()
         self._stop_search_thread()
@@ -698,4 +836,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             self.download_thread_qt.quit()
             self.download_thread_qt.wait()
         self.download_thread_qt = None
+        if hasattr(self, 'update_thread_qt') and self.update_thread_qt is not None and self.update_thread_qt.isRunning():
+            self.update_thread_qt.quit()
+            self.update_thread_qt.wait()
         super().closeEvent(event)

@@ -8,11 +8,8 @@ from PySide6 import QtWidgets
 from src.view_pyside import MusicDownloaderView
 
 # TODO: Mejorar la interfaz gráfica.
-# TODO: Agregar un checkbox para habilitar/deshabilitar Spotify y descarga de carátulas.
-# TODO: Bloquear "Buscar" mientras haya una descarga en curso.
 # TODO: Botón para cancelar la descarga en curso de forma segura.
 # TODO: Notificación del sistema al finalizar todas las descargas (opcional).
-# FIXME: Reintentar descargas que fallen por errores transitorios de red.
 # FIXME: Al cerrar la aplicación, finalizar correctamente hilos y tareas activas.
 
 

@@ -326,57 +326,68 @@ class MusicDownloaderController:
 
             def _task(idx, song):
                 # Notify per-file start if hook provided
-                try:
-                    if per_file_hook:
-                        try:
-                            per_file_hook(idx, len(song_list),
-                                          song.get('title'))
-                        except Exception:
-                            pass
-                    # Log thread info for debug
-                    if log_hook:
-                        try:
-                            log_hook(
-                                f"[DEBUG] Starting download idx={idx} title={song.get('title')} thread={threading.current_thread().name}:{threading.get_ident()}")
-                        except Exception:
-                            pass
+                if per_file_hook:
+                    try:
+                        per_file_hook(idx, len(song_list),
+                                      song.get('title'))
+                    except Exception:
+                        pass
+                # Log thread info for debug
+                if log_hook:
+                    try:
+                        log_hook(
+                            f"[DEBUG] Starting download idx={idx} title={song.get('title')} thread={threading.current_thread().name}:{threading.get_ident()}")
+                    except Exception:
+                        pass
 
-                    # Create a per-task progress wrapper that informs the caller which index is reporting.
-                    def _task_progress(info):
-                        try:
-                            if per_file_progress_hook:
+                # Create a per-task progress wrapper that informs the caller which index is reporting.
+                def _task_progress(info):
+                    try:
+                        if per_file_progress_hook:
+                            try:
+                                per_file_progress_hook(idx, info)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        progress_hook(info)
+                    except Exception:
+                        pass
+
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        return self.download_song(
+                            song["title"],
+                            song["artist"],
+                            save_path,
+                            _task_progress,
+                            song["format"],
+                            log_hook=log_hook,
+                            youtube_url=song.get("youtube_url"),
+                            result_id=song.get("result_id"),
+                        )
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            try:
+                                _task_progress({"status": "retrying"})
+                            except Exception:
+                                pass
+                            if log_hook:
                                 try:
-                                    per_file_progress_hook(idx, info)
+                                    log_hook(
+                                        f"[REINTENTO {attempt+1}/{max_retries}] {song.get('title')} falló por: {e}. Reintentando...")
                                 except Exception:
                                     pass
-                        except Exception:
-                            pass
-                        try:
-                            progress_hook(info)
-                        except Exception:
-                            pass
-
-                    return self.download_song(
-                        song["title"],
-                        song["artist"],
-                        save_path,
-                        _task_progress,
-                        song["format"],
-                        log_hook=log_hook,
-                        youtube_url=song.get("youtube_url"),
-                        result_id=song.get("result_id"),
-                    )
-                except Exception as e:
-                    if log_hook:
-                        try:
-                            log_hook(
-                                f"[ERROR] descarga de {song.get('title')} falló: {e}")
-                        except Exception:
-                            pass
-                    else:
-                        print(
-                            f"[ERROR] descarga de {song.get('title')} falló: {e}")
-                    raise
+                        else:
+                            if log_hook:
+                                try:
+                                    log_hook(
+                                        f"[ERROR] descarga de {song.get('title')} falló definitivamente tras {max_retries} intentos: {e}")
+                                except Exception:
+                                    pass
+                            raise
 
             for idx, song in enumerate(song_list):
                 future = executor.submit(_task, idx, song)
