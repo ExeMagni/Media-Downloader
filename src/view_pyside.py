@@ -46,7 +46,7 @@ class CoverWorker(QtCore.QRunnable):
             r = requests.get(self.url, timeout=5)
             r.raise_for_status()
             img = Image.open(BytesIO(r.content)).convert('RGBA')
-            img = img.resize((140, 140))
+            img = img.resize((120, 120))
             qimg = ImageQt(img)
             # Se copia la imagen para transferirla de manera segura al hilo principal
             self.signals.finished.emit(QtGui.QImage(qimg).copy(), self.url)
@@ -158,25 +158,156 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
-        self.setWindowTitle("Music Downloader")
-        self.resize(900, 600)
+        self.setWindowTitle("Media Downloader")
+        self.resize(1050, 720)
         self.cover_cache = {}
+
+        # Aplicar estilo oscuro moderno (basado en Catppuccin Mocha)
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1e1e2e;
+            }
+            QWidget {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+                font-family: 'Segoe UI', sans-serif;
+                font-size: 13px;
+            }
+            QLineEdit {
+                background-color: #313244;
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                padding: 8px;
+                color: #cdd6f4;
+            }
+            QLineEdit:focus {
+                border: 1px solid #89b4fa;
+            }
+            QPushButton {
+                background-color: #89b4fa;
+                color: #11111b;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #b4befe;
+            }
+            QPushButton:pressed {
+                background-color: #74c7ec;
+            }
+            QPushButton:disabled {
+                background-color: #45475a;
+                color: #a6adc8;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #45475a;
+                border-radius: 8px;
+                margin-top: 16px;
+                padding-top: 12px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 5px;
+                color: #89b4fa;
+                font-size: 14px;
+            }
+            QListWidget {
+                background-color: #181825;
+                border: 1px solid #45475a;
+                border-radius: 8px;
+                padding: 4px;
+                outline: none;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #313244;
+                border-radius: 4px;
+            }
+            QListWidget::item:selected {
+                background-color: #313244;
+                border: 1px solid #89b4fa;
+            }
+            QProgressBar {
+                border: 1px solid #45475a;
+                border-radius: 4px;
+                text-align: center;
+                background-color: #313244;
+                color: #cdd6f4;
+            }
+            QProgressBar::chunk {
+                background-color: #a6e3a1;
+                border-radius: 3px;
+            }
+            QTextEdit {
+                background-color: #11111b;
+                border: 1px solid #45475a;
+                border-radius: 8px;
+                color: #a6adc8;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                padding: 8px;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #1e1e2e;
+                width: 12px;
+                margin: 0px 0px 0px 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #45475a;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QCheckBox, QRadioButton {
+                spacing: 8px;
+            }
+            QCheckBox::indicator, QRadioButton::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         layout = QtWidgets.QVBoxLayout(central)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
 
-        grid = QtWidgets.QGridLayout()
-        layout.addLayout(grid)
+        # --- 1. Panel de Búsqueda ---
+        search_group = QtWidgets.QGroupBox("Búsqueda")
+        search_layout = QtWidgets.QVBoxLayout(search_group)
+        search_layout.setSpacing(12)
+
+        inputs_layout = QtWidgets.QHBoxLayout()
+        inputs_layout.setSpacing(12)
 
         self.search_entry = QtWidgets.QLineEdit()
-        self.search_entry.setPlaceholderText("Buscar")
+        self.search_entry.setPlaceholderText(
+            "Buscar término, playlist o URL...")
+        inputs_layout.addWidget(QtWidgets.QLabel("General:"))
+        inputs_layout.addWidget(self.search_entry, stretch=2)
+
         self.song_entry = QtWidgets.QLineEdit()
-        self.song_entry.setPlaceholderText("Canción")
+        self.song_entry.setPlaceholderText("Ej: Shape of You")
+        inputs_layout.addWidget(QtWidgets.QLabel("Canción:"))
+        inputs_layout.addWidget(self.song_entry, stretch=1)
+
         self.artist_entry = QtWidgets.QLineEdit()
-        self.artist_entry.setPlaceholderText("Artista")
-        self.youtube_search_checkbox = QtWidgets.QCheckBox(
-            "Buscar en YouTube")
+        self.artist_entry.setPlaceholderText("Ej: Ed Sheeran")
+        inputs_layout.addWidget(QtWidgets.QLabel("Artista:"))
+        inputs_layout.addWidget(self.artist_entry, stretch=1)
+
+        search_layout.addLayout(inputs_layout)
+
+        filters_layout = QtWidgets.QHBoxLayout()
+        self.youtube_search_checkbox = QtWidgets.QCheckBox("YouTube")
         self.youtube_search_checkbox.setChecked(
             self.controller.is_youtube_search_enabled())
         self.youtube_search_checkbox.setToolTip(
@@ -184,8 +315,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.youtube_search_checkbox.stateChanged.connect(
             self._on_search_preferences_changed)
 
-        self.spotify_search_checkbox = QtWidgets.QCheckBox(
-            "Buscar en Spotify")
+        self.spotify_search_checkbox = QtWidgets.QCheckBox("Spotify")
         self.spotify_search_checkbox.setChecked(
             self.controller.is_spotify_search_enabled())
         self.spotify_search_checkbox.setToolTip(
@@ -193,8 +323,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.spotify_search_checkbox.stateChanged.connect(
             self._on_search_preferences_changed)
 
-        self.cover_search_checkbox = QtWidgets.QCheckBox(
-            "Busqueda con portada")
+        self.cover_search_checkbox = QtWidgets.QCheckBox("Buscar Portadas")
         self.cover_search_checkbox.setChecked(
             self.controller.is_cover_search_enabled())
         self.cover_search_checkbox.setToolTip(
@@ -202,127 +331,186 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.cover_search_checkbox.stateChanged.connect(
             self._on_search_preferences_changed)
 
-        grid.addWidget(QtWidgets.QLabel("Buscar:"), 0, 0)
-        grid.addWidget(self.search_entry, 0, 1)
-        grid.addWidget(QtWidgets.QLabel("Canción:"), 1, 0)
-        grid.addWidget(self.song_entry, 1, 1)
-        grid.addWidget(QtWidgets.QLabel("Artista:"), 2, 0)
-        grid.addWidget(self.artist_entry, 2, 1)
+        filters_layout.addWidget(self.youtube_search_checkbox)
+        filters_layout.addWidget(self.spotify_search_checkbox)
+        filters_layout.addWidget(self.cover_search_checkbox)
+        filters_layout.addStretch()
 
         self.search_button = QtWidgets.QPushButton("Buscar")
+        self.search_button.setMinimumWidth(150)
+        self.search_button.setCursor(QtCore.Qt.PointingHandCursor)
         self.search_button.clicked.connect(self.search_thread)
-        grid.addWidget(self.search_button, 0, 2, 2, 1)
+        filters_layout.addWidget(self.search_button)
 
-        self.clear_cache_button = QtWidgets.QPushButton("Limpiar caché")
-        self.clear_cache_button.clicked.connect(self.clear_search_cache)
-        grid.addWidget(self.clear_cache_button, 2, 2)
+        search_layout.addLayout(filters_layout)
+        layout.addWidget(search_group)
 
-        grid.addWidget(self.youtube_search_checkbox, 3, 0)
-        grid.addWidget(self.spotify_search_checkbox, 3, 1)
-        grid.addWidget(self.cover_search_checkbox, 3, 2)
+        # --- 2. Área Principal Dividida ---
+        content_layout = QtWidgets.QHBoxLayout()
+        content_layout.setSpacing(20)
+        layout.addLayout(content_layout, stretch=1)
 
-        self.cache_size_label = QtWidgets.QLabel("")
-        grid.addWidget(self.cache_size_label, 4, 0, 1, 2)
-
-        self.update_button = QtWidgets.QPushButton("Actualizar motor (yt-dlp)")
-        self.update_button.setToolTip(
-            "Actualiza yt-dlp para solucionar problemas de descarga")
-        self.update_button.clicked.connect(self.update_ytdlp)
-        grid.addWidget(self.update_button, 4, 2)
-
-        # Results and downloads list
-        lists_layout = QtWidgets.QHBoxLayout()
-        layout.addLayout(lists_layout)
-
-        left_v = QtWidgets.QVBoxLayout()
-        lists_layout.addLayout(left_v)
+        # --- Panel Izquierdo (Resultados) ---
+        left_panel = QtWidgets.QVBoxLayout()
+        content_layout.addLayout(left_panel, stretch=1)
 
         left_header = QtWidgets.QHBoxLayout()
-        left_header.addWidget(QtWidgets.QLabel("Resultados de búsqueda:"))
+        left_title = QtWidgets.QLabel("Resultados de búsqueda")
+        left_title.setStyleSheet(
+            "font-size: 15px; font-weight: bold; color: #89b4fa;")
+        left_header.addWidget(left_title)
+
         legend_layout = QtWidgets.QHBoxLayout()
         legend_layout.setContentsMargins(10, 0, 0, 0)
-        for source, color_hex in [("Spotify", "#1DB954"), ("YouTube", "#FF8C73"), ("Local", "#B0B0B0")]:
+        for source, color_hex in [("Spotify", "#a6e3a1"), ("YouTube", "#f38ba8"), ("Local", "#b4befe")]:
             color_box = QtWidgets.QFrame()
-            color_box.setFixedSize(14, 14)
-            color_box.setStyleSheet(f"background-color: {color_hex};")
+            color_box.setFixedSize(12, 12)
+            color_box.setStyleSheet(
+                f"background-color: {color_hex}; border-radius: 2px;")
             legend_layout.addWidget(color_box)
             legend_label = QtWidgets.QLabel(source)
-            legend_label.setStyleSheet("font-size: 12px; margin-left: 2px;")
+            legend_label.setStyleSheet("font-size: 11px;")
             legend_layout.addWidget(legend_label)
         legend_layout.addStretch()
         left_header.addLayout(legend_layout)
-        left_v.addLayout(left_header)
+        left_panel.addLayout(left_header)
 
         self.results_list = QtWidgets.QListWidget()
-        left_v.addWidget(self.results_list)
+        self.results_list.setAlternatingRowColors(True)
         self.results_list.itemDoubleClicked.connect(self.add_song)
         self.results_list.currentRowChanged.connect(
             self.on_result_selection_changed)
-        left_v.addStretch()
+        left_panel.addWidget(self.results_list)
 
-        mid_v = QtWidgets.QVBoxLayout()
-        lists_layout.addLayout(mid_v)
-        mid_v.addWidget(QtWidgets.QLabel("Formato:"))
+        cover_add_layout = QtWidgets.QHBoxLayout()
+        cover_add_layout.setSpacing(15)
+        self.cover_label = QtWidgets.QLabel("Sin imagen")
+        self.cover_label.setFixedSize(120, 120)
+        self.cover_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.cover_label.setStyleSheet(
+            "background-color: #181825; border: 1px solid #45475a; border-radius: 8px; color: #6c7086;")
+        cover_add_layout.addWidget(self.cover_label)
+
+        add_btns_layout = QtWidgets.QVBoxLayout()
+        add_btns_layout.setSpacing(10)
+        self.add_button = QtWidgets.QPushButton("Agregar Seleccionada ➔")
+        self.add_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.add_button.clicked.connect(self.add_song)
+        self.select_all_button = QtWidgets.QPushButton("Agregar Todas ➔")
+        self.select_all_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.select_all_button.clicked.connect(self.select_all_results)
+        add_btns_layout.addWidget(self.add_button)
+        add_btns_layout.addWidget(self.select_all_button)
+        add_btns_layout.addStretch()
+
+        cover_add_layout.addLayout(add_btns_layout)
+        left_panel.addLayout(cover_add_layout)
+
+        # --- Panel Derecho (Cola) ---
+        right_panel = QtWidgets.QVBoxLayout()
+        content_layout.addLayout(right_panel, stretch=1)
+
+        queue_header = QtWidgets.QHBoxLayout()
+        right_title = QtWidgets.QLabel("Cola de descarga")
+        right_title.setStyleSheet(
+            "font-size: 15px; font-weight: bold; color: #a6e3a1;")
+        queue_header.addWidget(right_title)
+        queue_header.addStretch()
+
+        queue_header.addWidget(QtWidgets.QLabel("Formato:"))
         self.format_group = QtWidgets.QButtonGroup()
         self.mp3_radio = QtWidgets.QRadioButton("MP3")
         self.mp4_radio = QtWidgets.QRadioButton("MP4")
         self.mp3_radio.setChecked(True)
         self.format_group.addButton(self.mp3_radio)
         self.format_group.addButton(self.mp4_radio)
-        mid_v.addWidget(self.mp3_radio)
-        mid_v.addWidget(self.mp4_radio)
-        mid_v.addStretch()
+        queue_header.addWidget(self.mp3_radio)
+        queue_header.addWidget(self.mp4_radio)
 
-        right_v = QtWidgets.QVBoxLayout()
-        lists_layout.addLayout(right_v)
-        right_v.addWidget(QtWidgets.QLabel("Canciones a descargar:"))
+        right_panel.addLayout(queue_header)
+
         self.downloads_list = QtWidgets.QListWidget()
-        right_v.addWidget(self.downloads_list)
         self.downloads_list.itemDoubleClicked.connect(self.remove_song)
-        right_v.addStretch()
+        right_panel.addWidget(self.downloads_list)
 
-        btns_layout = QtWidgets.QHBoxLayout()
-        layout.addLayout(btns_layout)
-        self.add_button = QtWidgets.QPushButton("Agregar")
-        self.add_button.clicked.connect(self.add_song)
-        btns_layout.addWidget(self.add_button)
-        self.select_all_button = QtWidgets.QPushButton("Seleccionar todo")
-        self.select_all_button.clicked.connect(self.select_all_results)
-        btns_layout.addWidget(self.select_all_button)
-        self.remove_button = QtWidgets.QPushButton("Eliminar")
+        queue_actions_layout = QtWidgets.QHBoxLayout()
+        self.remove_button = QtWidgets.QPushButton("Quitar Seleccionada")
+        self.remove_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.remove_button.setStyleSheet(
+            "background-color: transparent; border: 1px solid #f38ba8; color: #f38ba8;")
         self.remove_button.clicked.connect(self.remove_song)
-        btns_layout.addWidget(self.remove_button)
-        self.clear_selected_button = QtWidgets.QPushButton(
-            "Limpiar seleccionados")
+
+        self.clear_selected_button = QtWidgets.QPushButton("Limpiar Cola")
+        self.clear_selected_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.clear_selected_button.setStyleSheet(
+            "background-color: transparent; border: 1px solid #fab387; color: #fab387;")
         self.clear_selected_button.clicked.connect(self.clear_selected_songs)
-        btns_layout.addWidget(self.clear_selected_button)
 
-        self.download_button = QtWidgets.QPushButton("Descargar")
+        queue_actions_layout.addWidget(self.remove_button)
+        queue_actions_layout.addWidget(self.clear_selected_button)
+        queue_actions_layout.addStretch()
+
+        self.download_button = QtWidgets.QPushButton("▶ Descargar")
+        self.download_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.download_button.setMinimumWidth(150)
+        self.download_button.setMinimumHeight(38)
+        self.download_button.setStyleSheet(
+            "background-color: #a6e3a1; color: #11111b; font-size: 14px; border-radius: 6px;")
         self.download_button.clicked.connect(self.download_thread)
-        layout.addWidget(self.download_button)
+        queue_actions_layout.addWidget(self.download_button)
 
-        # Per-item progress bars are shown in the downloads list; removed global progress bar
+        right_panel.addLayout(queue_actions_layout)
 
-        # Overall progress: number of files completed / total
+        # --- 3. Panel Inferior (Estado y Log) ---
+        bottom_panel = QtWidgets.QVBoxLayout()
+        layout.addLayout(bottom_panel)
+
+        status_layout = QtWidgets.QHBoxLayout()
+        self.status_label = QtWidgets.QLabel("Listo")
+        self.status_label.setStyleSheet(
+            "color: #89dceb; font-weight: bold; font-size: 13px;")
+        self.current_file_label = QtWidgets.QLabel("")
+        status_layout.addWidget(self.status_label)
+        status_layout.addStretch()
+        status_layout.addWidget(self.current_file_label)
+        bottom_panel.addLayout(status_layout)
+
         self.overall_progress_bar = QtWidgets.QProgressBar()
         self.overall_progress_bar.setRange(0, 100)
         self.overall_progress_bar.setVisible(False)
-        layout.addWidget(self.overall_progress_bar)
-
-        self.current_file_label = QtWidgets.QLabel("")
-        layout.addWidget(self.current_file_label)
-
-        self.status_label = QtWidgets.QLabel("")
-        layout.addWidget(self.status_label)
-
-        self.cover_label = QtWidgets.QLabel("Portada")
-        self.cover_label.setFixedSize(140, 140)
-        self.cover_label.setAlignment(QtCore.Qt.AlignCenter)
-        layout.addWidget(self.cover_label)
+        self.overall_progress_bar.setFixedHeight(8)
+        self.overall_progress_bar.setTextVisible(False)
+        bottom_panel.addWidget(self.overall_progress_bar)
 
         self.log = QtWidgets.QTextEdit()
         self.log.setReadOnly(True)
-        layout.addWidget(self.log)
+        self.log.setFixedHeight(100)
+        bottom_panel.addWidget(self.log)
+
+        tools_layout = QtWidgets.QHBoxLayout()
+        self.cache_size_label = QtWidgets.QLabel("")
+        self.cache_size_label.setStyleSheet("color: #6c7086; font-size: 11px;")
+
+        self.clear_cache_button = QtWidgets.QPushButton("Limpiar caché")
+        self.clear_cache_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.clear_cache_button.setStyleSheet(
+            "background-color: transparent; color: #a6adc8; font-size: 11px; text-decoration: underline; padding: 0;")
+        self.clear_cache_button.clicked.connect(self.clear_search_cache)
+
+        self.update_button = QtWidgets.QPushButton("Actualizar yt-dlp")
+        self.update_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.update_button.setStyleSheet(
+            "background-color: transparent; color: #a6adc8; font-size: 11px; text-decoration: underline; padding: 0;")
+        self.update_button.setToolTip(
+            "Actualiza yt-dlp para solucionar problemas de descarga")
+        self.update_button.clicked.connect(self.update_ytdlp)
+
+        tools_layout.addWidget(self.cache_size_label)
+        tools_layout.addSpacing(15)
+        tools_layout.addWidget(self.clear_cache_button)
+        tools_layout.addStretch()
+        tools_layout.addWidget(self.update_button)
+        bottom_panel.addLayout(tools_layout)
 
         # Internal state
         # Keep widgets and progress bars parallel to the download queue.
@@ -356,10 +544,10 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
     def _source_color(source: str):
         normalized = (source or "").strip().lower()
         if normalized == "spotify":
-            return QtGui.QColor("#1DB954")
+            return QtGui.QColor("#a6e3a1")
         if normalized == "youtube":
-            return QtGui.QColor("#FF8C73")
-        return QtGui.QColor("#B0B0B0")
+            return QtGui.QColor("#f38ba8")
+        return QtGui.QColor("#b4befe")
 
     @staticmethod
     def _format_bytes(bytes_size: int) -> str:
@@ -592,6 +780,43 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         self.status_label.setText("Caché limpiada")
         self.refresh_cache_size_label()
 
+    def _create_queue_item_widget(self, display):
+        item = QtWidgets.QListWidgetItem()
+        widget = QtWidgets.QWidget()
+        widget.setStyleSheet("background-color: transparent;")
+        h = QtWidgets.QHBoxLayout(widget)
+        h.setContentsMargins(4, 4, 4, 4)
+
+        lbl = QtWidgets.QLabel(display)
+        lbl.setStyleSheet("color: #cdd6f4;")
+
+        bar = QtWidgets.QProgressBar()
+        bar.setRange(0, 100)
+        bar.setValue(0)
+        bar.setFixedWidth(120)
+        bar.setFixedHeight(14)
+        bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #45475a;
+                border-radius: 3px;
+                text-align: center;
+                font-size: 10px;
+                color: #cdd6f4;
+                background-color: #1e1e2e;
+            }
+            QProgressBar::chunk {
+                background-color: #89b4fa;
+                border-radius: 2px;
+            }
+        """)
+
+        h.addWidget(lbl)
+        h.addStretch()
+        h.addWidget(bar)
+
+        item.setSizeHint(widget.sizeHint())
+        return item, widget, bar
+
     def add_song(self, item=None):
         idx = self.results_list.currentRow()
         if idx < 0:
@@ -606,21 +831,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
             return
 
         display = queue_item['display']
-        # Create list item with embedded progress bar
-        item = QtWidgets.QListWidgetItem()
-        widget = QtWidgets.QWidget()
-        h = QtWidgets.QHBoxLayout(widget)
-        lbl = QtWidgets.QLabel(display)
-        bar = QtWidgets.QProgressBar()
-        bar.setRange(0, 100)
-        bar.setValue(0)
-        bar.setFixedWidth(160)
-        bar.setFormat("%p%")
-        h.addWidget(lbl)
-        h.addStretch()
-        h.addWidget(bar)
-        h.setContentsMargins(2, 2, 2, 2)
-        item.setSizeHint(widget.sizeHint())
+        item, widget, bar = self._create_queue_item_widget(display)
         self.downloads_list.addItem(item)
         self.downloads_list.setItemWidget(item, widget)
         self.download_item_widgets.append((item, widget))
@@ -656,20 +867,7 @@ class MusicDownloaderView(QtWidgets.QMainWindow):
         added_items = self.controller.add_all_results_to_download_queue(fmt)
         for queue_item in added_items:
             display = queue_item['display']
-            item = QtWidgets.QListWidgetItem()
-            widget = QtWidgets.QWidget()
-            h = QtWidgets.QHBoxLayout(widget)
-            lbl = QtWidgets.QLabel(display)
-            bar = QtWidgets.QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(0)
-            bar.setFixedWidth(160)
-            bar.setFormat("%p%")
-            h.addWidget(lbl)
-            h.addStretch()
-            h.addWidget(bar)
-            h.setContentsMargins(2, 2, 2, 2)
-            item.setSizeHint(widget.sizeHint())
+            item, widget, bar = self._create_queue_item_widget(display)
             self.downloads_list.addItem(item)
             self.downloads_list.setItemWidget(item, widget)
             self.download_item_widgets.append((item, widget))
