@@ -7,10 +7,7 @@ from PySide6 import QtWidgets
 
 from src.view_pyside import MusicDownloaderView
 
-# TODO: Mejorar la interfaz gráfica.
-# TODO: Botón para cancelar la descarga en curso de forma segura.
 # TODO: Notificación del sistema al finalizar todas las descargas (opcional).
-# FIXME: Al cerrar la aplicación, finalizar correctamente hilos y tareas activas.
 
 
 def get_spotify_credentials_qt(parent=None):
@@ -70,5 +67,8 @@ if __name__ == "__main__":
     # Crear la ventana principal (la vista se encargará de mostrarla)
     view = MusicDownloaderView(controller)
     view.show()
+
+    # Finalizar correctamente tareas activas al cerrar la aplicación
+    app.aboutToQuit.connect(controller.cancel_all_downloads)
 
     sys.exit(app.exec())

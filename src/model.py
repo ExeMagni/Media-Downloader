@@ -1,14 +1,15 @@
 class Song:
-    def __init__(self, title, artist, url, youtube_url=None, result_id=None, source=None):
+    def __init__(self, title, artist, url, youtube_url=None, result_id=None, source=None, cover_url=None):
         self.title = title
         self.artist = artist
         self.url = url  # Puede ser Spotify, etc.
         self.youtube_url = youtube_url  # Enlace real de YouTube
         self.result_id = result_id
         self.source = source
+        self.cover_url = cover_url
 
     def __repr__(self):
-        return f"Song(title={self.title}, artist={self.artist}, url={self.url}, youtube_url={self.youtube_url})"
+        return f"Song(title={self.title}, artist={self.artist}, url={self.url}, youtube_url={self.youtube_url}, cover_url={self.cover_url})"
 
 
 class MediaManager:
@@ -67,7 +68,8 @@ class MediaManager:
                                 'artist': s.artist, 'url': s.url,
                                 'youtube_url': s.youtube_url,
                                 'result_id': s.result_id,
-                                'source': self._infer_source(s)})
+                                'source': self._infer_source(s),
+                                'cover_url': s.cover_url})
         return results
 
     def search_by_artist_title(self, artist, title):
@@ -81,7 +83,8 @@ class MediaManager:
                                 'artist': s.artist, 'url': s.url,
                                 'youtube_url': s.youtube_url,
                                 'result_id': s.result_id,
-                                'source': self._infer_source(s)})
+                                'source': self._infer_source(s),
+                                'cover_url': s.cover_url})
         return results
 
     def get_song(self, title, artist, result_id=None):
@@ -97,7 +100,8 @@ class MediaManager:
                         'artist': song.artist,
                         'youtube_url': song.youtube_url,
                         'result_id': song.result_id,
-                        'source': self._infer_source(song)
+                        'source': self._infer_source(song),
+                        'cover_url': song.cover_url
                     }
 
         # Prefer exact match first to avoid ambiguous substring matches.
@@ -109,7 +113,8 @@ class MediaManager:
                     'artist': song.artist,
                     'youtube_url': song.youtube_url,
                     'result_id': song.result_id,
-                    'source': self._infer_source(song)
+                    'source': self._infer_source(song),
+                    'cover_url': song.cover_url
                 }
 
         for entry in self._index:
@@ -120,7 +125,8 @@ class MediaManager:
                     'artist': song.artist,
                     'youtube_url': song.youtube_url,
                     'result_id': song.result_id,
-                    'source': self._infer_source(song)
+                    'source': self._infer_source(song),
+                    'cover_url': song.cover_url
                 }
         return None
 
@@ -171,8 +177,8 @@ class MediaManager:
             result_id = item.get('id')
             # Obtener la imagen del álbum
             cover_url = item['album']['images'][0]['url'] if item['album']['images'] else None
-            song = Song(title, artist, url,
-                        result_id=result_id, source='Spotify')
+            song = Song(title, artist, url, result_id=result_id,
+                        source='Spotify', cover_url=cover_url)
             self.add_song(song)
             results.append({
                 'type': 'song',

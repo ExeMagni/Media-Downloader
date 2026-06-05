@@ -42,6 +42,7 @@ class MusicDownloaderController:
             state_service=self._state_service,
             youtube_provider=self._youtube_provider,
         )
+        self._cancel_requested = False
 
         # Only authenticate Spotify if enabled and credentials provided
         if self.enable_spotify and client_id and client_secret:
@@ -240,6 +241,10 @@ class MusicDownloaderController:
             self._config_service.get("enable_youtube", self.enable_youtube)
         )
 
+    def cancel_all_downloads(self):
+        """Solicita la cancelación de las descargas pendientes o en curso."""
+        self._cancel_requested = True
+
     def search(self, query):
         return self._search_use_cases.search(
             query=query,
@@ -319,12 +324,16 @@ class MusicDownloaderController:
         workers = max_workers if max_workers else self.max_workers
         failed_downloads = []
         total_songs = len(song_list)
+        self._cancel_requested = False
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = []
             future_meta = {}
 
             def _task(idx, song):
+                if self._cancel_requested:
+                    raise RuntimeError(
+                        "Descarga cancelada por el usuario o cierre de la aplicación.")
                 # Notify per-file start if hook provided
                 if per_file_hook:
                     try:
